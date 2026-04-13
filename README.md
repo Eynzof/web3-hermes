@@ -15,6 +15,10 @@ cd hermes-webui
 python3 bootstrap.py
 ```
 
+<img width="1919" height="1079" alt="微信图片_20260413155246_163_419" src="https://github.com/user-attachments/assets/8795774d-3168-47ab-b32a-313a4603d822" />
+
+
+
 ---
 
 # Hermes Web UI
