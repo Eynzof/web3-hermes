@@ -1,3 +1,14 @@
+# Web3Hermes
+
+> 可查看 `issue` 获取社群二维码
+
+Hermes-Agent 中文版 WebUI，便于中国用户使用。由 https://github.com/nesquena/hermes-webui 修改而来。
+
+实现了从安装界面到使用的全过程汉化，默认语言设置为简体中文，修复大量翻译错误。
+
+
+---
+
 # Hermes Web UI
 
 [Hermes Agent](https://hermes-agent.nousresearch.com/) 是一个先进的自主代理,运行在您的服务器上,可通过终端或消息应用访问,它会记住所学内容并随着运行时间变得更加强大。
