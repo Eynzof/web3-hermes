@@ -1,0 +1,391 @@
+/* Hermes WebUI - UI精修样式 */
+
+/* ========== 字体优化 ========== */
+
+/* 中文字体栈优化 */
+:root {
+  --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Hiragino Sans GB", 
+               "Microsoft YaHei", "微软雅黑", "Noto Sans CJK SC", "Source Han Sans SC", 
+               "WenQuanYi Micro Hei", sans-serif;
+  --font-mono: "SF Mono", "Cascadia Code", "Fira Code", "JetBrains Mono", "Consolas", 
+               "Monaco", "Courier New", "PingFang SC", "Microsoft YaHei", monospace;
+}
+
+body {
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
+}
+
+/* 代码字体优化 */
+code, pre, .msg-body code, .msg-body pre {
+  font-family: var(--font-mono);
+}
+
+/* ========== 中文排版优化 ========== */
+
+/* 增加中文文本行高 */
+body, p, div, span, li, td, th {
+  line-height: 1.7;
+}
+
+/* 标题行高调整 */
+h1, h2, h3, h4, h5, h6 {
+  line-height: 1.4;
+  font-weight: 600;
+}
+
+/* 按钮文字优化 */
+button, .btn, .icon-btn {
+  font-weight: 500;
+  letter-spacing: 0.02em;
+}
+
+/* ========== 间距优化 ========== */
+
+/* 消息气泡间距 */
+.msg-row {
+  margin-bottom: 20px;
+}
+
+.msg-row + .msg-row {
+  margin-top: 20px;
+}
+
+/* 卡片间距 */
+.tool-card, .approval-card, .clarify-card {
+  margin: 16px 0;
+}
+
+/* 侧边栏项目间距 */
+.session-item {
+  margin-bottom: 4px;
+  padding: 10px 40px 10px 10px;
+}
+
+/* 按钮内边距优化 - 已移除，使用各按钮自己的默认 padding */
+
+/* ========== 颜色增强 ========== */
+
+/* 提高文本对比度 */
+:root {
+  --text-primary: #f0f0f3;
+  --text-secondary: #b0b0c0;
+  --text-muted: #8a8a9a;
+}
+
+.msg-body {
+  color: var(--text-primary);
+}
+
+/* 链接颜色优化 */
+a {
+  color: #7cb9ff;
+  text-decoration: none;
+  transition: color 0.2s ease;
+}
+
+a:hover {
+  color: #a0d0ff;
+  text-decoration: underline;
+}
+
+/* 代码块对比度 */
+.msg-body pre {
+  background: rgba(0, 0, 0, 0.4);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.msg-body code {
+  background: rgba(0, 0, 0, 0.3);
+  padding: 2px 6px;
+  border-radius: 4px;
+}
+
+/* ========== 动画优化 ========== */
+
+/* 平滑过渡 */
+* {
+  transition-timing-function: cubic-bezier(0.4, 0.0, 0.2, 1);
+}
+
+/* 按钮悬停动画 */
+button:not(:disabled):hover,
+.icon-btn:hover,
+.nav-tab:hover,
+.icon-nav-btn:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
+}
+
+button:not(:disabled):active,
+.icon-btn:active {
+  transform: translateY(0);
+  box-shadow: none;
+}
+
+/* 消息淡入动画 */
+@keyframes fadeInUp {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.msg-row {
+  animation: fadeInUp 0.3s ease-out;
+}
+
+/* 工具卡片动画 */
+@keyframes slideIn {
+  from {
+    opacity: 0;
+    transform: translateX(-10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+.tool-card {
+  animation: slideIn 0.3s ease-out;
+}
+
+/* 加载动画优化 */
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.loading-spinner {
+  animation: spin 1s linear infinite;
+}
+
+/* 脉冲动画 */
+@keyframes pulse {
+  0%, 100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.5;
+  }
+}
+
+.thinking-indicator {
+  animation: pulse 1.5s ease-in-out infinite;
+}
+
+/* ========== 焦点状态优化 ========== */
+
+/* 统一焦点样式 */
+*:focus-visible {
+  outline: 2px solid rgba(124, 185, 255, 0.6);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+input:focus,
+textarea:focus,
+select:focus {
+  border-color: rgba(124, 185, 255, 0.6);
+  box-shadow: 0 0 0 3px rgba(124, 185, 255, 0.1);
+}
+
+/* ========== 滚动条优化 ========== */
+
+/* 自定义滚动条 */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.2);
+  border-radius: 4px;
+  transition: background 0.2s ease;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.3);
+}
+
+/* Firefox滚动条 */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255, 255, 255, 0.2) transparent;
+}
+
+/* ========== 卡片阴影优化 ========== */
+
+.tool-card,
+.approval-card,
+.clarify-card,
+.session-item.active {
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+}
+
+.tool-card:hover {
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+}
+
+/* ========== 输入框优化 ========== */
+
+input[type="text"],
+input[type="password"],
+input[type="email"],
+textarea,
+select {
+  transition: all 0.2s ease;
+}
+
+input[type="text"]:hover,
+input[type="password"]:hover,
+input[type="email"]:hover,
+textarea:hover,
+select:hover {
+  border-color: rgba(124, 185, 255, 0.3);
+}
+
+/* ========== 消息气泡优化 ========== */
+
+.msg-body {
+  border-radius: 12px;
+  padding: 16px;
+}
+
+/* 用户消息 */
+.msg-row.user .msg-body {
+  background: rgba(124, 185, 255, 0.08);
+  border: 1px solid rgba(124, 185, 255, 0.2);
+}
+
+/* 助手消息 */
+.msg-row.assistant .msg-body {
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+/* ========== 标签优化 ========== */
+
+.chip, .project-chip {
+  border-radius: 8px;
+  padding: 6px 12px;
+  font-size: 12px;
+  font-weight: 500;
+  transition: all 0.2s ease;
+}
+
+.chip:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.1);
+}
+
+/* ========== 图标优化 ========== */
+
+svg {
+  transition: all 0.2s ease;
+}
+
+button:hover svg,
+.icon-btn:hover svg {
+  transform: scale(1.05);
+}
+
+/* ========== 响应式优化 ========== */
+/* Mobile support removed - desktop only */
+
+/* ========== 深色主题优化 ========== */
+
+:root[data-theme="dark"] {
+  --text-primary: #f0f0f3;
+  --text-secondary: #c0c0d0;
+}
+
+
+/* ========== 加载状态优化 ========== */
+
+.loading-overlay {
+  backdrop-filter: blur(4px);
+  background: rgba(0, 0, 0, 0.3);
+}
+
+
+
+/* ========== 性能优化 ========== */
+
+/* 使用GPU加速 */
+.msg-row,
+.tool-card,
+button,
+.icon-btn {
+  will-change: transform;
+  transform: translateZ(0);
+}
+
+/* 减少重绘 */
+.msg-body img,
+.msg-body video {
+  will-change: transform;
+}
+
+/* ========== 无障碍优化 ========== */
+
+/* 跳过导航链接 */
+.skip-to-content {
+  position: absolute;
+  top: -40px;
+  left: 0;
+  background: var(--accent);
+  color: white;
+  padding: 8px 16px;
+  text-decoration: none;
+  z-index: 100;
+}
+
+.skip-to-content:focus {
+  top: 0;
+}
+
+/* 屏幕阅读器专用文本 */
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border-width: 0;
+}
+
+/* ========== 打印样式 ========== */
+
+@media print {
+  .sidebar,
+  .topbar,
+  .composer-wrap,
+  .icon-nav {
+    display: none !important;
+  }
+  
+  .main {
+    width: 100% !important;
+    max-width: 100% !important;
+  }
+  
+  .msg-row {
+    page-break-inside: avoid;
+  }
+}

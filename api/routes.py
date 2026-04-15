@@ -5,6 +5,7 @@ Extracted from server.py (Sprint 11) so server.py is a thin shell.
 
 import html as _html
 import json
+import logging
 import os
 import queue
 import sys
@@ -13,6 +14,8 @@ import time
 import uuid
 from pathlib import Path
 from urllib.parse import parse_qs
+
+logger = logging.getLogger(__name__)
 
 from api.config import (
     STATE_DIR,
@@ -55,6 +58,68 @@ from api.helpers import (
 import re as _re
 
 
+def _normalize_host_port(value: str) -> tuple[str, str | None]:
+    """Split a host or host:port string into (hostname, port|None).
+    Handles IPv6 bracket notation, e.g. [::1]:8080."""
+    value = value.strip().lower()
+    if not value:
+        return '', None
+    if value.startswith('['):
+        end = value.find(']')
+        if end != -1:
+            host = value[1:end]
+            rest = value[end + 1 :]
+            if rest.startswith(':') and rest[1:].isdigit():
+                return host, rest[1:]
+            return host, None
+    if value.count(':') == 1:
+        host, port = value.rsplit(':', 1)
+        if port.isdigit():
+            return host, port
+    return value, None
+
+
+def _ports_match(origin_scheme: str, origin_port: str | None, allowed_port: str | None) -> bool:
+    """Return True when two ports should be considered equivalent, scheme-aware.
+
+    Treats an absent port as the scheme default: port 80 for http, port 443 for https.
+    Port 80 is NOT treated as equivalent to 443 (different protocols = different origins).
+    """
+    if origin_port == allowed_port:
+        return True
+    # Determine the default port for the origin's scheme
+    default = '443' if origin_scheme == 'https' else '80'
+    if not origin_port and allowed_port == default:
+        return True
+    if not allowed_port and origin_port == default:
+        return True
+    return False
+
+
+def _allowed_public_origins() -> set[str]:
+    """Parse HERMES_WEBUI_ALLOWED_ORIGINS env var (comma-separated) into a set.
+
+    Each entry must include the scheme, e.g. https://myapp.example.com:8000.
+    Entries without a scheme are silently skipped and a warning is printed.
+    """
+    raw = os.getenv('HERMES_WEBUI_ALLOWED_ORIGINS', '')
+    result = set()
+    for value in raw.split(','):
+        value = value.strip().rstrip('/').lower()
+        if not value:
+            continue
+        if not (value.startswith('http://') or value.startswith('https://')):
+            import sys
+            print(
+                f"[webui] WARNING: HERMES_WEBUI_ALLOWED_ORIGINS entry {value!r} is missing "
+                f"the scheme (expected https://hostname or http://hostname). Entry ignored.",
+                flush=True, file=sys.stderr,
+            )
+            continue
+        result.add(value)
+    return result
+
+
 def _check_csrf(handler) -> bool:
     """Reject cross-origin POST requests. Returns True if OK."""
     origin = handler.headers.get("Origin", "")
@@ -68,10 +133,16 @@ def _check_csrf(handler) -> bool:
     if not m:
         return False
     origin_host = m.group(1)
+    origin_scheme = m.group(0).split('://')[0].lower()  # 'http' or 'https'
+    origin_name, origin_port = _normalize_host_port(origin_host)
+    # Check against explicitly allowed public origins (env var)
+    origin_value = m.group(0).rstrip('/').lower()
+    if origin_value in _allowed_public_origins():
+        return True
     # Allow same-origin: check Host, X-Forwarded-Host (reverse proxy), and
     # X-Real-Host against the origin. Reverse proxies (Caddy, nginx) set
     # X-Forwarded-Host to the client's original Host header.
-    allowed_hosts = {
+    allowed_hosts = [
         h.strip()
         for h in [
             host,
@@ -79,9 +150,11 @@ def _check_csrf(handler) -> bool:
             handler.headers.get("X-Real-Host", ""),
         ]
         if h.strip()
-    }
-    if origin_host in allowed_hosts:
-        return True
+    ]
+    for allowed in allowed_hosts:
+        allowed_name, allowed_port = _normalize_host_port(allowed)
+        if origin_name == allowed_name and _ports_match(origin_scheme, origin_port, allowed_port):
+            return True
     return False
 
 
@@ -107,8 +180,9 @@ from api.workspace import (
     list_dir,
     read_file_content,
     safe_resolve_ws,
+    resolve_trusted_workspace,
 )
-from api.upload import handle_upload
+from api.upload import handle_upload, handle_transcribe
 from api.streaming import _sse, _run_agent_streaming, cancel_stream
 from api.onboarding import (
     apply_onboarding_setup,
@@ -140,6 +214,18 @@ except ImportError:
     _lock = threading.Lock()
     _permanent_approved = set()
 
+# Clarify prompts (optional -- graceful fallback if agent not available)
+try:
+    from api.clarify import (
+        submit_pending as submit_clarify_pending,
+        get_pending as get_clarify_pending,
+        resolve_clarify,
+    )
+except ImportError:
+    submit_clarify_pending = lambda *a, **k: None
+    get_clarify_pending = lambda *a, **k: None
+    resolve_clarify = lambda *a, **k: 0
+
 
 # ── Login page locale strings ─────────────────────────────────────────────────
 # Add entries here to support more languages on the login page.
@@ -164,6 +250,36 @@ _LOGIN_LOCALE = {
         "conn_failed": "\u8fde\u63a5\u5931\u8d25",
     },
 }
+
+
+def _resolve_login_locale_key(raw_lang: str | None) -> str:
+    """Resolve settings.language to a known _LOGIN_LOCALE key."""
+    if not raw_lang:
+        return "en"
+    lang = str(raw_lang).strip()
+    if not lang:
+        return "en"
+    if lang in _LOGIN_LOCALE:
+        return lang
+
+    normalized = lang.replace("_", "-")
+    lower = normalized.lower()
+
+    # Case-insensitive direct key match first.
+    for key in _LOGIN_LOCALE:
+        if key.lower() == lower:
+            return key
+
+    # Common Chinese aliases - all map to simplified Chinese.
+    if lower == "zh" or lower.startswith("zh-"):
+        return "zh"
+
+    # Fallback to base language subtag (e.g. en-US -> en).
+    base = lower.split("-", 1)[0]
+    for key in _LOGIN_LOCALE:
+        if key.lower() == base:
+            return key
+    return "en"
 
 # ── Login page (self-contained, no external deps) ────────────────────────────
 _LOGIN_PAGE_HTML = """<!doctype html>
@@ -219,8 +335,10 @@ def handle_get(handler, parsed) -> bool:
     if parsed.path == "/login":
         _settings = load_settings()
         _bn = _html.escape(_settings.get("bot_name") or "Hermes")
-        _lang = _settings.get("language", "zh")
-        _login_strings = _LOGIN_LOCALE.get(_lang, _LOGIN_LOCALE["en"])
+        _lang = _settings.get("language", "en")
+        _login_strings = _LOGIN_LOCALE[
+            _resolve_login_locale_key(_lang)
+        ]
         _page = (
             _LOGIN_PAGE_HTML.replace("{{BOT_NAME}}", _bn)
             .replace("{{BOT_NAME_INITIAL}}", _bn[0].upper())
@@ -268,6 +386,9 @@ def handle_get(handler, parsed) -> bool:
     if parsed.path == "/api/models":
         return j(handler, get_available_models())
 
+    if parsed.path == "/api/models/live":
+        return _handle_live_models(handler, parsed)
+
     if parsed.path == "/api/settings":
         settings = load_settings()
         # Never expose the stored password hash to clients
@@ -289,6 +410,10 @@ def handle_get(handler, parsed) -> bool:
             raw = s.compact() | {
                 "messages": s.messages,
                 "tool_calls": getattr(s, "tool_calls", []),
+                "active_stream_id": getattr(s, "active_stream_id", None),
+                "pending_user_message": getattr(s, "pending_user_message", None),
+                "pending_attachments": getattr(s, "pending_attachments", []),
+                "pending_started_at": getattr(s, "pending_started_at", None),
             }
             return j(handler, {"session": redact_session_data(raw)})
         except KeyError:
@@ -330,7 +455,13 @@ def handle_get(handler, parsed) -> bool:
             deduped_cli = []
         merged = webui_sessions + deduped_cli
         merged.sort(key=lambda s: s.get("updated_at", 0) or 0, reverse=True)
-        return j(handler, {"sessions": merged, "cli_count": len(deduped_cli)})
+        safe_merged = []
+        for s in merged:
+            item = dict(s)
+            if isinstance(item.get("title"), str):
+                item["title"] = _redact_text(item["title"])
+            safe_merged.append(item)
+        return j(handler, {"sessions": safe_merged, "cli_count": len(deduped_cli)})
 
     if parsed.path == "/api/projects":
         return j(handler, {"projects": load_projects()})
@@ -437,6 +568,9 @@ def handle_get(handler, parsed) -> bool:
     if parsed.path == '/api/sessions/gateway/stream':
         return _handle_gateway_sse_stream(handler)
 
+    if parsed.path == "/api/media":
+        return _handle_media(handler, parsed)
+
     if parsed.path == "/api/file/raw":
         return _handle_file_raw(handler, parsed)
 
@@ -451,6 +585,15 @@ def handle_get(handler, parsed) -> bool:
         if handler.client_address[0] != "127.0.0.1":
             return j(handler, {"error": "not found"}, status=404)
         return _handle_approval_inject(handler, parsed)
+
+    if parsed.path == "/api/clarify/pending":
+        return _handle_clarify_pending(handler, parsed)
+
+    if parsed.path == "/api/clarify/inject_test":
+        # Loopback-only: used by automated tests; blocked from any remote client
+        if handler.client_address[0] != "127.0.0.1":
+            return j(handler, {"error": "not found"}, status=404)
+        return _handle_clarify_inject(handler, parsed)
 
     # ── Cron API (GET) ──
     if parsed.path == "/api/crons":
@@ -546,10 +689,17 @@ def handle_post(handler, parsed) -> bool:
     if parsed.path == "/api/upload":
         return handle_upload(handler)
 
+    if parsed.path == "/api/transcribe":
+        return handle_transcribe(handler)
+
     body = read_body(handler)
 
     if parsed.path == "/api/session/new":
-        s = new_session(workspace=body.get("workspace"), model=body.get("model"))
+        try:
+            workspace = str(resolve_trusted_workspace(body.get("workspace"))) if body.get("workspace") else None
+        except ValueError as e:
+            return bad(handler, str(e))
+        s = new_session(workspace=workspace, model=body.get("model"))
         return j(handler, {"session": s.compact() | {"messages": s.messages}})
 
     if parsed.path == "/api/sessions/cleanup":
@@ -624,7 +774,10 @@ def handle_post(handler, parsed) -> bool:
             s = get_session(body["session_id"])
         except KeyError:
             return bad(handler, "Session not found", 404)
-        new_ws = str(Path(body.get("workspace", s.workspace)).expanduser().resolve())
+        try:
+            new_ws = str(resolve_trusted_workspace(body.get("workspace", s.workspace)))
+        except ValueError as e:
+            return bad(handler, str(e))
         s.workspace = new_ws
         s.model = body.get("model", s.model)
         s.save()
@@ -635,25 +788,31 @@ def handle_post(handler, parsed) -> bool:
         sid = body.get("session_id", "")
         if not sid:
             return bad(handler, "session_id is required")
+        if not all(c in '0123456789abcdefghijklmnopqrstuvwxyz_' for c in sid):
+            return bad(handler, "Invalid session_id", 400)
         # Delete from WebUI session store
         with LOCK:
             SESSIONS.pop(sid, None)
-        p = SESSION_DIR / f"{sid}.json"
+        try:
+            p = (SESSION_DIR / f"{sid}.json").resolve()
+            p.relative_to(SESSION_DIR.resolve())
+        except Exception:
+            return bad(handler, "Invalid session_id", 400)
         try:
             p.unlink(missing_ok=True)
         except Exception:
-            pass
+            logger.debug("Failed to unlink session file %s", p)
         try:
             SESSION_INDEX_FILE.unlink(missing_ok=True)
         except Exception:
-            pass
+            logger.debug("Failed to unlink session index")
         # Also delete from CLI state.db (for CLI sessions shown in sidebar)
         try:
             from api.models import delete_cli_session
 
             delete_cli_session(sid)
         except Exception:
-            pass
+            logger.debug("Failed to delete CLI session %s", sid)
         return j(handler, {"ok": True})
 
     if parsed.path == "/api/session/clear":
@@ -744,6 +903,10 @@ def handle_post(handler, parsed) -> bool:
     if parsed.path == "/api/approval/respond":
         return _handle_approval_respond(handler, body)
 
+    # ── Clarify (POST) ──
+    if parsed.path == "/api/clarify/respond":
+        return _handle_clarify_respond(handler, body)
+
     # ── Skills (POST) ──
     if parsed.path == "/api/skills/save":
         return _handle_skill_save(handler, body)
@@ -761,8 +924,10 @@ def handle_post(handler, parsed) -> bool:
         if not name:
             return bad(handler, "name is required")
         try:
-            from api.profiles import switch_profile
+            from api.profiles import switch_profile, _validate_profile_name
 
+            if name != 'default':
+                _validate_profile_name(name)
             result = switch_profile(name)
             return j(handler, result)
         except (ValueError, FileNotFoundError) as e:
@@ -809,8 +974,9 @@ def handle_post(handler, parsed) -> bool:
         if not name:
             return bad(handler, "name is required")
         try:
-            from api.profiles import delete_profile_api
+            from api.profiles import delete_profile_api, _validate_profile_name
 
+            _validate_profile_name(name)
             result = delete_profile_api(name)
             return j(handler, result)
         except (ValueError, FileNotFoundError) as e:
@@ -820,26 +986,81 @@ def handle_post(handler, parsed) -> bool:
 
     # ── Settings (POST) ──
     if parsed.path == "/api/settings":
+        from api.auth import (
+            create_session,
+            is_auth_enabled,
+            parse_cookie,
+            set_auth_cookie,
+            verify_session,
+        )
+
         if "bot_name" in body:
             body["bot_name"] = (str(body["bot_name"]) or "").strip() or "Hermes"
+
+        auth_enabled_before = is_auth_enabled()
+        current_cookie = parse_cookie(handler)
+        logged_in_before = bool(current_cookie and verify_session(current_cookie))
+        requested_password = bool(
+            isinstance(body.get("_set_password"), str)
+            and body.get("_set_password", "").strip()
+        )
+
         saved = save_settings(body)
         saved.pop("password_hash", None)  # never expose hash to client
-        return j(handler, saved)
+
+        auth_enabled_after = is_auth_enabled()
+        auth_just_enabled = bool(
+            requested_password and auth_enabled_after and not auth_enabled_before
+        )
+        logged_in_after = logged_in_before
+        new_cookie = None
+
+        if auth_just_enabled and not logged_in_before:
+            new_cookie = create_session()
+            logged_in_after = True
+
+        saved["auth_enabled"] = auth_enabled_after
+        saved["logged_in"] = logged_in_after
+        saved["auth_just_enabled"] = auth_just_enabled
+
+        if not new_cookie:
+            return j(handler, saved)
+
+        response_body = json.dumps(saved, ensure_ascii=False, indent=2).encode("utf-8")
+        handler.send_response(200)
+        handler.send_header("Content-Type", "application/json; charset=utf-8")
+        handler.send_header("Content-Length", str(len(response_body)))
+        handler.send_header("Cache-Control", "no-store")
+        set_auth_cookie(handler, new_cookie)
+        _security_headers(handler)
+        handler.end_headers()
+        handler.wfile.write(response_body)
+        return True
 
     if parsed.path == "/api/onboarding/setup":
         # Writing API keys to disk - restrict to local/private networks unless auth is active.
         # In Docker, requests arrive from the bridge network (172.x.x.x), not 127.0.0.1,
         # even when the user accesses via localhost:8787 on the host.
+        # Behind a reverse proxy (nginx/Caddy/Traefik) or SSH tunnel, X-Forwarded-For
+        # carries the real origin IP — read it first before falling back to the raw socket addr.
+        # HERMES_WEBUI_ONBOARDING_OPEN=1 lets operators on remote servers explicitly bypass
+        # the check when they control network access themselves (e.g. firewall + VPN).
         from api.auth import is_auth_enabled
-        if not is_auth_enabled():
+        import os as _os
+        if not is_auth_enabled() and not _os.getenv("HERMES_WEBUI_ONBOARDING_OPEN"):
             import ipaddress
             try:
-                addr = ipaddress.ip_address(handler.client_address[0])
+                # Prefer forwarded headers set by reverse proxies
+                _xff = handler.headers.get("X-Forwarded-For", "").split(",")[0].strip()
+                _xri = handler.headers.get("X-Real-IP", "").strip()
+                _raw = handler.client_address[0]
+                _ip_str = _xff or _xri or _raw
+                addr = ipaddress.ip_address(_ip_str)
                 is_local = addr.is_loopback or addr.is_private
             except ValueError:
                 is_local = False
             if not is_local:
-                return bad(handler, "Onboarding setup is only available from local networks when auth is not enabled.", 403)
+                return bad(handler, "Onboarding setup is only available from local networks when auth is not enabled. To bypass this on a remote server, set HERMES_WEBUI_ONBOARDING_OPEN=1.", 403)
         try:
             return j(handler, apply_onboarding_setup(body))
         except ValueError as e:
@@ -963,9 +1184,9 @@ def handle_post(handler, parsed) -> bool:
                             s.project_id = None
                             s.save()
                         except Exception:
-                            pass
+                            logger.debug("Failed to update session %s", entry.get("session_id"))
             except Exception:
-                pass
+                logger.debug("Failed to load session index for project unlink")
         return j(handler, {"ok": True})
 
     # ── Session import from JSON (POST) ──
@@ -1092,12 +1313,21 @@ def _handle_sessions_search(handler, parsed):
     content_search = qs.get("content", ["1"])[0] == "1"
     depth = int(qs.get("depth", ["5"])[0])
     if not q:
-        return j(handler, {"sessions": all_sessions()})
+        safe_sessions = []
+        for s in all_sessions():
+            item = dict(s)
+            if isinstance(item.get("title"), str):
+                item["title"] = _redact_text(item["title"])
+            safe_sessions.append(item)
+        return j(handler, {"sessions": safe_sessions})
     results = []
     for s in all_sessions():
         title_match = q in (s.get("title") or "").lower()
         if title_match:
-            results.append(dict(s, match_type="title"))
+            item = dict(s, match_type="title")
+            if isinstance(item.get("title"), str):
+                item["title"] = _redact_text(item["title"])
+            results.append(item)
             continue
         if content_search:
             try:
@@ -1112,7 +1342,10 @@ def _handle_sessions_search(handler, parsed):
                             if isinstance(p, dict) and p.get("type") == "text"
                         )
                     if q in str(c).lower():
-                        results.append(dict(s, match_type="content"))
+                        item = dict(s, match_type="content")
+                        if isinstance(item.get("title"), str):
+                            item["title"] = _redact_text(item["title"])
+                        results.append(item)
                         break
             except (KeyError, Exception):
                 pass
@@ -1162,20 +1395,57 @@ def _handle_sse_stream(handler, parsed):
     handler.send_header("Cache-Control", "no-cache")
     handler.send_header("X-Accel-Buffering", "no")
     handler.send_header("Connection", "keep-alive")
+    # Add CORS headers for better compatibility
+    handler.send_header("Access-Control-Allow-Origin", "*")
     handler.end_headers()
+    
+    last_event_time = time.time()
+    keepalive_interval = 15  # Send keepalive every 15 seconds
+    
     try:
         while True:
             try:
-                event, data = q.get(timeout=30)
+                # Calculate dynamic timeout based on last event
+                timeout = max(5, keepalive_interval - (time.time() - last_event_time))
+                event, data = q.get(timeout=timeout)
+                
+                # Write event with error handling
+                try:
+                    _sse(handler, event, data)
+                    last_event_time = time.time()
+                except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
+                    # Client disconnected, exit gracefully
+                    break
+                    
+                if event in ("done", "error", "cancel", "apperror"):
+                    break
+                    
             except queue.Empty:
-                handler.wfile.write(b": heartbeat\n\n")
-                handler.wfile.flush()
-                continue
-            _sse(handler, event, data)
-            if event in ("done", "error", "cancel"):
-                break
-    except (BrokenPipeError, ConnectionResetError):
+                # Send keepalive with timestamp to help client detect stale connections
+                try:
+                    keepalive_msg = f": heartbeat {int(time.time())}\n\n"
+                    handler.wfile.write(keepalive_msg.encode('utf-8'))
+                    handler.wfile.flush()
+                    last_event_time = time.time()
+                except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
+                    # Client disconnected during keepalive
+                    break
+                    
+    except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
+        # Connection errors are expected when client disconnects
         pass
+    except Exception as e:
+        # Log unexpected errors but don't crash
+        logger.error(f"SSE stream error for {stream_id}: {e}")
+    finally:
+        # Clean up resources
+        with STREAMS_LOCK:
+            if stream_id in STREAMS:
+                del STREAMS[stream_id]
+            if stream_id in CANCEL_FLAGS:
+                del CANCEL_FLAGS[stream_id]
+            if stream_id in AGENT_INSTANCES:
+                del AGENT_INSTANCES[stream_id]
     return True
 
 
@@ -1225,6 +1495,131 @@ def _handle_gateway_sse_stream(handler):
     return True
 
 
+def _content_disposition_value(disposition: str, filename: str) -> str:
+    """Build a latin-1-safe Content-Disposition value with RFC 5987 filename*."""
+    import urllib.parse as _up
+
+    safe_name = Path(filename).name.replace("\r", "").replace("\n", "")
+    ascii_fallback = "".join(
+        ch if 32 <= ord(ch) < 127 and ch not in {'"', '\\'} else "_"
+        for ch in safe_name
+    ).strip(" .")
+    if not ascii_fallback:
+        suffix = Path(safe_name).suffix
+        ascii_suffix = "".join(
+            ch if 32 <= ord(ch) < 127 and ch not in {'"', '\\'} else "_"
+            for ch in suffix
+        )
+        ascii_fallback = f"download{ascii_suffix}" if ascii_suffix else "download"
+    quoted_name = _up.quote(safe_name, safe="")
+    return (
+        f'{disposition}; filename="{ascii_fallback}"; '
+        f"filename*=UTF-8''{quoted_name}"
+    )
+
+
+def _handle_media(handler, parsed):
+    """Serve a local file by absolute path for inline display in the chat.
+
+    Security:
+    - Path must resolve to an allowed root (hermes home, /tmp, common dirs)
+    - Auth-gated when auth is enabled
+    - Only image MIME types are served inline; all others force download
+    - SVG always served as attachment (XSS risk)
+    - No path traversal: resolved path must stay within an allowed root
+    """
+    import os as _os
+    from api.auth import is_auth_enabled, parse_cookie, verify_session
+    _HOME = Path(_os.path.expanduser("~"))
+    _HERMES_HOME = Path(_os.getenv("HERMES_HOME", str(_HOME / ".hermes"))).expanduser()
+
+    # Auth check
+    if is_auth_enabled():
+        cv = parse_cookie(handler)
+        if not (cv and verify_session(cv)):
+            handler.send_response(401)
+            handler.send_header("Content-Type", "application/json")
+            handler.end_headers()
+            handler.wfile.write(b'{"error":"Authentication required"}')
+            return
+
+    qs = parse_qs(parsed.query)
+    raw_path = qs.get("path", [""])[0].strip()
+    if not raw_path:
+        return bad(handler, "path parameter required", 400)
+
+    # Resolve the path and check it is within an allowed root
+    try:
+        target = Path(raw_path).resolve()
+    except Exception:
+        return bad(handler, "Invalid path", 400)
+
+    # Allowed roots: hermes home, /tmp, and active workspace.
+    # Intentionally NOT the entire home dir — that would expose ~/.ssh,
+    # ~/.aws, browser profiles, etc. to any authenticated user.
+    allowed_roots = [
+        _HERMES_HOME.resolve(),
+        Path("/tmp").resolve(),
+        (_HOME / ".hermes").resolve(),
+    ]
+    # Also allow the active workspace directory (where screenshots land)
+    try:
+        from api.workspace import get_last_workspace
+        ws = Path(get_last_workspace()).resolve()
+        if ws.is_dir():
+            allowed_roots.append(ws)
+    except Exception:
+        pass
+    within_allowed = any(
+        _os.path.commonpath([str(target), str(root)]) == str(root)
+        for root in allowed_roots
+        if root.exists()
+    )
+    if not within_allowed:
+        return bad(handler, "Path not in allowed location", 403)
+
+    if not target.exists() or not target.is_file():
+        return j(handler, {"error": "not found"}, status=404)
+
+    # Determine MIME type
+    ext = target.suffix.lower()
+    mime = MIME_MAP.get(ext, "application/octet-stream")
+
+    # Only serve image types inline; everything else is a download
+    _INLINE_IMAGE_TYPES = {
+        "image/png", "image/jpeg", "image/gif", "image/webp",
+        "image/x-icon", "image/bmp",
+    }
+    _DOWNLOAD_TYPES = {"image/svg+xml"}  # SVG: XSS risk, force download
+
+    try:
+        raw_bytes = target.read_bytes()
+    except PermissionError:
+        return bad(handler, "Permission denied", 403)
+    except Exception:
+        return bad(handler, "Could not read file", 500)
+
+    handler.send_response(200)
+    handler.send_header("Content-Type", mime)
+    handler.send_header("Content-Length", str(len(raw_bytes)))
+    handler.send_header("Cache-Control", "private, max-age=3600")
+    _security_headers(handler)
+
+    if mime in _DOWNLOAD_TYPES or mime not in _INLINE_IMAGE_TYPES:
+        handler.send_header(
+            "Content-Disposition",
+            _content_disposition_value("attachment", target.name),
+        )
+    else:
+        handler.send_header(
+            "Content-Disposition",
+            _content_disposition_value("inline", target.name),
+        )
+
+    handler.end_headers()
+    handler.wfile.write(raw_bytes)
+
+
 def _handle_file_raw(handler, parsed):
     qs = parse_qs(parsed.query)
     sid = qs.get("session_id", [""])[0]
@@ -1242,9 +1637,6 @@ def _handle_file_raw(handler, parsed):
     ext = target.suffix.lower()
     mime = MIME_MAP.get(ext, "application/octet-stream")
     raw_bytes = target.read_bytes()
-    import urllib.parse as _up
-
-    safe_name = _up.quote(target.name, safe="")
     handler.send_response(200)
     handler.send_header("Content-Type", mime)
     handler.send_header("Content-Length", str(len(raw_bytes)))
@@ -1254,12 +1646,12 @@ def _handle_file_raw(handler, parsed):
     if force_download or mime in dangerous_types:
         handler.send_header(
             "Content-Disposition",
-            f"attachment; filename=\"{target.name}\"; filename*=UTF-8''{safe_name}",
+            _content_disposition_value("attachment", target.name),
         )
     else:
         handler.send_header(
             "Content-Disposition",
-            f"inline; filename=\"{target.name}\"; filename*=UTF-8''{safe_name}",
+            _content_disposition_value("inline", target.name),
         )
     handler.end_headers()
     handler.wfile.write(raw_bytes)
@@ -1313,6 +1705,119 @@ def _handle_approval_inject(handler, parsed):
     return j(handler, {"error": "session_id required"}, status=400)
 
 
+def _handle_clarify_pending(handler, parsed):
+    sid = parse_qs(parsed.query).get("session_id", [""])[0]
+    pending = get_clarify_pending(sid)
+    if pending:
+        return j(handler, {"pending": pending})
+    return j(handler, {"pending": None})
+
+
+def _handle_clarify_inject(handler, parsed):
+    """Inject a fake pending clarify prompt -- loopback-only, used by automated tests."""
+    qs = parse_qs(parsed.query)
+    sid = qs.get("session_id", [""])[0]
+    question = qs.get("question", ["Which option?"])[0]
+    choices = qs.get("choices", [])
+    if sid:
+        submit_clarify_pending(
+            sid,
+            {
+                "question": question,
+                "choices_offered": choices,
+                "session_id": sid,
+                "kind": "clarify",
+            },
+        )
+        return j(handler, {"ok": True, "session_id": sid})
+    return j(handler, {"error": "session_id required"}, status=400)
+
+
+def _handle_live_models(handler, parsed):
+    """Return the live model list for a provider.
+
+    Delegates to the agent's provider_model_ids() which handles:
+    - OpenRouter: live fetch from /api/v1/models
+    - Anthropic: live fetch from /v1/models (API key or OAuth token)
+    - Copilot: live fetch from api.githubcopilot.com/models with correct headers
+    - openai-codex: Codex OAuth endpoint + local ~/.codex/ cache fallback
+    - Nous: live fetch from inference-api.nousresearch.com/v1/models
+    - DeepSeek, kimi-coding, opencode-zen/go, custom: generic OpenAI-compat /v1/models
+    - ZAI, MiniMax, Google/Gemini: fall back to static list (non-standard endpoints)
+    - All others: static _PROVIDER_MODELS fallback
+
+    The agent already maintains all provider-specific auth and endpoint logic
+    in one place; the WebUI inherits it rather than duplicating it.
+
+    Query params:
+        provider  (optional) — provider ID; defaults to active profile provider
+    """
+    qs = parse_qs(parsed.query)
+    provider = (qs.get("provider", [""])[0] or "").lower().strip()
+
+    try:
+        from api.config import get_config as _gc
+        cfg = _gc()
+        if not provider:
+            provider = cfg.get("model", {}).get("provider") or ""
+        if not provider:
+            return j(handler, {"error": "no_provider", "models": []})
+
+        # Delegate to the agent's live-fetch + fallback resolver.
+        # provider_model_ids() tries live endpoints first and falls back to
+        # the static _PROVIDER_MODELS list — it never raises.
+        try:
+            import sys as _sys
+            import os as _os
+            _agent_dir = _os.path.join(_os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))),
+                                       "..", "..", ".hermes", "hermes-agent")
+            _agent_dir = _os.path.normpath(_agent_dir)
+            if _agent_dir not in _sys.path:
+                _sys.path.insert(0, _agent_dir)
+            from hermes_cli.models import provider_model_ids as _pmi
+            ids = _pmi(provider)
+        except Exception as _import_err:
+            logger.debug("provider_model_ids import failed for %s: %s", provider, _import_err)
+            # Last resort: return the WebUI's own static catalog
+            from api.config import _PROVIDER_MODELS as _pm
+            ids = [m["id"] for m in _pm.get(provider, [])]
+
+        if not ids:
+            return j(handler, {"provider": provider, "models": [], "count": 0})
+
+        # Normalise to {id, label} — provider_model_ids() returns plain string IDs
+        def _make_label(mid):
+            """Best-effort human label from a model ID string."""
+            # Preserve slashes for router IDs like "anthropic/claude-sonnet-4.6"
+            display = mid.split("/")[-1] if "/" in mid else mid
+            parts = display.split("-")
+            result = []
+            for p in parts:
+                pl = p.lower()
+                if pl == "gpt":
+                    result.append("GPT")
+                elif pl in ("claude", "gemini", "gemma", "llama", "mistral",
+                            "qwen", "deepseek", "grok", "kimi", "glm"):
+                    result.append(p.capitalize())
+                elif p[:1].isdigit():
+                    result.append(p)  # version numbers: 5.4, 3.5, 4.6 — unchanged
+                else:
+                    result.append(p.capitalize())
+            label = " ".join(result)
+            # Restore well-known uppercase tokens that title-casing breaks
+            for orig in ("GPT", "GLM", "API", "AI", "XL", "MoE"):
+                label = label.replace(orig.title(), orig)
+            return label
+
+        models_out = [{"id": mid, "label": _make_label(mid)} for mid in ids if mid]
+        return j(handler, {"provider": provider, "models": models_out,
+                           "count": len(models_out)})
+
+    except Exception as _e:
+        logger.debug("_handle_live_models failed for %s: %s", provider, _e)
+        return j(handler, {"error": str(_e), "models": []})
+
+
 def _handle_cron_output(handler, parsed):
     from cron.jobs import OUTPUT_DIR as CRON_OUT
 
@@ -1330,7 +1835,7 @@ def _handle_cron_output(handler, parsed):
                 txt = f.read_text(encoding="utf-8", errors="replace")
                 outputs.append({"filename": f.name, "content": txt[:8000]})
             except Exception:
-                pass
+                logger.debug("Failed to read cron output file %s", f)
     return j(handler, {"job_id": job_id, "outputs": outputs})
 
 
@@ -1424,7 +1929,7 @@ def _handle_sessions_cleanup(handler, body, zero_only=False):
                 p.unlink(missing_ok=True)
                 cleaned += 1
         except Exception:
-            pass
+            logger.debug("Failed to clean up session file %s", p)
     if SESSION_INDEX_FILE.exists():
         SESSION_INDEX_FILE.unlink(missing_ok=True)
     return j(handler, {"ok": True, "cleaned": cleaned})
@@ -1443,13 +1948,38 @@ def _handle_chat_start(handler, body):
     if not msg:
         return bad(handler, "message is required")
     attachments = [str(a) for a in (body.get("attachments") or [])][:20]
-    workspace = str(Path(body.get("workspace") or s.workspace).expanduser().resolve())
+    try:
+        workspace = str(resolve_trusted_workspace(body.get("workspace") or s.workspace))
+    except ValueError as e:
+        return bad(handler, str(e))
     model = body.get("model") or s.model
+    # Prevent duplicate runs in the same session while a stream is still active.
+    # This commonly happens after page refresh/reconnect races and can produce
+    # duplicated clarify cards for what appears to be a single user request.
+    current_stream_id = getattr(s, "active_stream_id", None)
+    if current_stream_id:
+        with STREAMS_LOCK:
+            current_active = current_stream_id in STREAMS
+        if current_active:
+            return j(
+                handler,
+                {
+                    "error": "session already has an active stream",
+                    "active_stream_id": current_stream_id,
+                },
+                status=409,
+            )
+        # Stale stream id from a previous run; clear and continue.
+        s.active_stream_id = None
+    stream_id = uuid.uuid4().hex
     s.workspace = workspace
     s.model = model
+    s.active_stream_id = stream_id
+    s.pending_user_message = msg
+    s.pending_attachments = attachments
+    s.pending_started_at = time.time()
     s.save()
     set_last_workspace(workspace)
-    stream_id = uuid.uuid4().hex
     q = queue.Queue()
     with STREAMS_LOCK:
         STREAMS[stream_id] = q
@@ -1571,7 +2101,7 @@ def _handle_chat_sync(handler, body):
                 message_count=len(s.messages),
             )
     except Exception:
-        pass
+        logger.debug("Failed to update session cost tracking")
     return j(
         handler,
         {
@@ -1787,11 +2317,10 @@ def _handle_workspace_add(handler, body):
     name = body.get("name", "").strip()
     if not path_str:
         return bad(handler, "path is required")
-    p = Path(path_str).expanduser().resolve()
-    if not p.exists():
-        return bad(handler, f"Path does not exist: {p}")
-    if not p.is_dir():
-        return bad(handler, f"Path is not a directory: {p}")
+    try:
+        p = resolve_trusted_workspace(path_str)
+    except ValueError as e:
+        return bad(handler, str(e))
     wss = load_workspaces()
     if any(w["path"] == str(p) for w in wss):
         return bad(handler, "Workspace already in list")
@@ -1851,6 +2380,22 @@ def _handle_approval_respond(handler, body):
     # thread is parked in entry.event.wait() and needs to be woken up.
     resolve_gateway_approval(sid, choice, resolve_all=False)
     return j(handler, {"ok": True, "choice": choice})
+
+
+def _handle_clarify_respond(handler, body):
+    sid = body.get("session_id", "")
+    if not sid:
+        return bad(handler, "session_id is required")
+    response = body.get("response")
+    if response is None:
+        response = body.get("answer")
+    if response is None:
+        response = body.get("choice")
+    response = str(response or "").strip()
+    if not response:
+        return bad(handler, "response is required")
+    resolve_clarify(sid, response, resolve_all=False)
+    return j(handler, {"ok": True, "response": response})
 
 
 def _handle_skill_save(handler, body):
@@ -1953,18 +2498,30 @@ def _handle_session_import_cli(handler, body):
     title = title_from(msgs, "CLI Session")
     model = "unknown"
 
-    # Get profile and model from CLI session metadata
+    # Get profile, model, and timestamps from CLI session metadata
     profile = None
+    created_at = None
+    updated_at = None
     for cs in get_cli_sessions():
         if cs["session_id"] == sid:
             profile = cs.get("profile")
             model = cs.get("model", "unknown")
+            created_at = cs.get("created_at")
+            updated_at = cs.get("updated_at")
             break
 
-    s = import_cli_session(sid, title, msgs, model, profile=profile)
+    s = import_cli_session(
+        sid,
+        title,
+        msgs,
+        model,
+        profile=profile,
+        created_at=created_at,
+        updated_at=updated_at,
+    )
     s.is_cli_session = True
     s._cli_origin = sid
-    s.save()
+    s.save(touch_updated_at=False)
     return j(
         handler,
         {

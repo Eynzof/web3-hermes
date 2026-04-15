@@ -1,0 +1,415 @@
+/* 强制浅色主题 - 覆盖所有其他样式 */
+
+:root[data-theme="light"] {
+  --bg: #FFFFFF !important;
+  --sidebar: #F8F9FA !important;
+  --text: #1A1A1A !important;
+  --muted: #6B7280 !important;
+  --border: rgba(0,0,0,0.08) !important;
+  --border2: rgba(0,0,0,0.12) !important;
+  --accent: #2563EB !important;
+  --blue: #2563EB !important;
+  --gold: #2563EB !important;
+  --code-bg: #F8F9FA !important;
+  --surface: #FFFFFF !important;
+  --topbar-bg: rgba(255,255,255,.98) !important;
+  --main-bg: rgba(255,255,255,0.98) !important;
+  --focus-ring: rgba(37,99,235,.4) !important;
+  --focus-glow: rgba(37,99,235,.15) !important;
+  --input-bg: rgba(0,0,0,.04) !important;
+  --hover-bg: rgba(37,99,235,.08) !important;
+  --strong: #1A1A1A !important;
+  --em: #1A1A1A !important;
+  --code-text: #2563EB !important;
+  --code-inline-bg: rgba(37,99,235,.1) !important;
+  --pre-text: #1A1A1A !important;
+}
+
+/* 强制所有文字为黑色 */
+:root[data-theme="light"] * {
+  color: #1A1A1A !important;
+}
+
+/* 次要文字为深灰 */
+:root[data-theme="light"] .muted,
+:root[data-theme="light"] [class*="muted"],
+:root[data-theme="light"] .session-meta,
+:root[data-theme="light"] .topbar-meta {
+  color: #6B7280 !important;
+}
+
+/* placeholder文字 */
+:root[data-theme="light"] ::placeholder {
+  color: #9CA3AF !important;
+  opacity: 1 !important;
+}
+
+/* 背景色 */
+:root[data-theme="light"] body {
+  background: #FFFFFF !important;
+  color: #1A1A1A !important;
+}
+
+:root[data-theme="light"] .sidebar {
+  background: #F8F9FA !important;
+}
+
+:root[data-theme="light"] .messages {
+  background: #FFFFFF !important;
+}
+
+/* 确保标题可见 */
+:root[data-theme="light"] h1,
+:root[data-theme="light"] h2,
+:root[data-theme="light"] h3,
+:root[data-theme="light"] h4,
+:root[data-theme="light"] h5,
+:root[data-theme="light"] h6 {
+  color: #1A1A1A !important;
+}
+
+/* 链接 */
+:root[data-theme="light"] a {
+  color: #2563EB !important;
+}
+
+/* 按钮 */
+:root[data-theme="light"] button {
+  color: inherit !important;
+}
+
+/* SVG图标 */
+:root[data-theme="light"] svg {
+  color: inherit !important;
+}
+
+/* 蓝色按钮强制白色文字 */
+:root[data-theme="light"] .new-chat-btn,
+:root[data-theme="light"] .new-chat-btn *,
+:root[data-theme="light"] .app-dialog-btn.confirm,
+:root[data-theme="light"] .app-dialog-btn.confirm *,
+:root[data-theme="light"] .app-dialog-btn.confirm.danger,
+:root[data-theme="light"] .app-dialog-btn.confirm.danger *,
+:root[data-theme="light"] .cron-btn.run,
+:root[data-theme="light"] .cron-btn.run *,
+:root[data-theme="light"] .update-btn,
+:root[data-theme="light"] .update-btn *,
+:root[data-theme="light"] .send-btn,
+:root[data-theme="light"] .send-btn *,
+:root[data-theme="light"] .approval-btn.once,
+:root[data-theme="light"] .approval-btn.once *,
+:root[data-theme="light"] button[style*="background: #2563EB"],
+:root[data-theme="light"] button[style*="background: #2563EB"] *,
+:root[data-theme="light"] button[style*="background:#2563EB"],
+:root[data-theme="light"] button[style*="background:#2563EB"] * {
+  color: #FFFFFF !important;
+}
+
+/* Modal/Dialog 修复 */
+:root[data-theme="light"] .app-dialog-overlay {
+  background: rgba(0, 0, 0, 0.4) !important;
+}
+
+:root[data-theme="light"] .app-dialog {
+  background: #FFFFFF !important;
+  border: 1px solid rgba(0, 0, 0, 0.12) !important;
+  box-shadow: 0 18px 60px rgba(0, 0, 0, 0.25) !important;
+}
+
+:root[data-theme="light"] .app-dialog-title {
+  color: #1A1A1A !important;
+}
+
+:root[data-theme="light"] .app-dialog-desc {
+  color: #6B7280 !important;
+}
+
+:root[data-theme="light"] .app-dialog-close {
+  background: rgba(0, 0, 0, 0.05) !important;
+  color: #6B7280 !important;
+}
+
+:root[data-theme="light"] .app-dialog-close:hover {
+  background: rgba(0, 0, 0, 0.1) !important;
+  color: #1A1A1A !important;
+}
+
+:root[data-theme="light"] .app-dialog-input {
+  background: #F8F9FA !important;
+  border: 1px solid rgba(0, 0, 0, 0.12) !important;
+  color: #1A1A1A !important;
+}
+
+:root[data-theme="light"] .app-dialog-input:focus {
+  border-color: #2563EB !important;
+  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.15) !important;
+}
+
+:root[data-theme="light"] .app-dialog-btn {
+  background: #F8F9FA !important;
+  border: 1px solid rgba(0, 0, 0, 0.12) !important;
+  color: #1A1A1A !important;
+}
+
+:root[data-theme="light"] .app-dialog-btn:hover {
+  background: rgba(0, 0, 0, 0.05) !important;
+}
+
+:root[data-theme="light"] .app-dialog-btn.confirm {
+  background: #2563EB !important;
+  border-color: #2563EB !important;
+  color: #FFFFFF !important;
+}
+
+:root[data-theme="light"] .app-dialog-btn.confirm:hover {
+  background: #1D4ED8 !important;
+  border-color: #1D4ED8 !important;
+}
+
+:root[data-theme="light"] .app-dialog-btn.confirm.danger {
+  background: #1A1A1A !important;
+  border-color: #1A1A1A !important;
+  color: #FFFFFF !important;
+}
+
+:root[data-theme="light"] .app-dialog-btn.confirm.danger:hover {
+  background: #000000 !important;
+  border-color: #000000 !important;
+}
+
+/* 聊天气泡颜色 */
+:root[data-theme="light"] .msg-row.user .msg-body {
+  background: rgba(37, 99, 235, 0.08) !important;
+  border-color: rgba(37, 99, 235, 0.3) !important;
+}
+
+:root[data-theme="light"] .msg-row.user .msg-body:hover {
+  background: rgba(37, 99, 235, 0.12) !important;
+  border-color: rgba(37, 99, 235, 0.5) !important;
+}
+
+:root[data-theme="light"] .msg-row.assistant .msg-body {
+  background: #F8F9FA !important;
+  border-color: rgba(0, 0, 0, 0.12) !important;
+}
+
+:root[data-theme="light"] .msg-row.assistant .msg-body:hover {
+  background: #F1F3F5 !important;
+  border-color: rgba(0, 0, 0, 0.18) !important;
+}
+
+/* 头像颜色 */
+:root[data-theme="light"] .msg-row.user .msg-avatar {
+  background: #2563EB !important;
+  color: #FFFFFF !important;
+  box-shadow: 0 2px 8px rgba(37, 99, 235, 0.3) !important;
+}
+
+:root[data-theme="light"] .msg-row.assistant .msg-avatar {
+  background: #1A1A1A !important;
+  color: #FFFFFF !important;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2) !important;
+}
+
+/* 思考过程卡片 */
+:root[data-theme="light"] .thinking-card {
+  background: rgba(37, 99, 235, 0.05) !important;
+  border-color: rgba(37, 99, 235, 0.2) !important;
+  box-shadow: 0 2px 8px rgba(37, 99, 235, 0.08) !important;
+}
+
+:root[data-theme="light"] .thinking-card:hover {
+  background: rgba(37, 99, 235, 0.08) !important;
+  border-color: rgba(37, 99, 235, 0.3) !important;
+  box-shadow: 0 3px 10px rgba(37, 99, 235, 0.12) !important;
+}
+
+:root[data-theme="light"] .thinking-title {
+  color: #2563EB !important;
+}
+
+:root[data-theme="light"] .thinking-content {
+  color: #1A1A1A !important;
+}
+
+/* Tool卡片 */
+:root[data-theme="light"] .tool-card {
+  background: #F8F9FA !important;
+  border-color: rgba(0, 0, 0, 0.12) !important;
+}
+
+:root[data-theme="light"] .tool-card:hover {
+  border-color: rgba(37, 99, 235, 0.3) !important;
+}
+
+:root[data-theme="light"] .tool-card-name {
+  color: #2563EB !important;
+}
+
+:root[data-theme="light"] .tool-arg-key {
+  color: #2563EB !important;
+}
+
+:root[data-theme="light"] .tool-arg-val {
+  color: #6B7280 !important;
+}
+
+/* 按钮和输入框 */
+:root[data-theme="light"] .new-chat-btn {
+  background: #2563EB !important;
+  color: #FFFFFF !important;
+  border-color: #2563EB !important;
+}
+
+:root[data-theme="light"] .new-chat-btn:hover {
+  background: #1D4ED8 !important;
+  border-color: #1D4ED8 !important;
+}
+
+:root[data-theme="light"] .cron-btn.run {
+  background: #2563EB !important;
+  color: #FFFFFF !important;
+  border-color: #2563EB !important;
+}
+
+:root[data-theme="light"] .cron-btn.run:hover {
+  background: #1D4ED8 !important;
+  border-color: #1D4ED8 !important;
+}
+
+:root[data-theme="light"] .update-btn {
+  background: #2563EB !important;
+  color: #FFFFFF !important;
+  border-color: #2563EB !important;
+}
+
+:root[data-theme="light"] .update-btn:hover {
+  background: #1D4ED8 !important;
+  border-color: #1D4ED8 !important;
+}
+
+:root[data-theme="light"] .send-btn {
+  background: #2563EB !important;
+  color: #FFFFFF !important;
+}
+
+:root[data-theme="light"] .send-btn:hover {
+  background: #1D4ED8 !important;
+}
+
+:root[data-theme="light"] input,
+:root[data-theme="light"] textarea {
+  background: #F8F9FA !important;
+  border-color: rgba(0, 0, 0, 0.12) !important;
+  color: #1A1A1A !important;
+}
+
+:root[data-theme="light"] input:focus,
+:root[data-theme="light"] textarea:focus {
+  border-color: #2563EB !important;
+  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.15) !important;
+}
+
+/* 会话列表 */
+:root[data-theme="light"] .session-item {
+  background: transparent !important;
+}
+
+:root[data-theme="light"] .session-item:hover {
+  background: rgba(37, 99, 235, 0.05) !important;
+}
+
+:root[data-theme="light"] .session-item.active {
+  background: rgba(37, 99, 235, 0.1) !important;
+  border-color: #2563EB !important;
+}
+
+:root[data-theme="light"] .session-title {
+  color: #1A1A1A !important;
+}
+
+/* 顶部栏 */
+:root[data-theme="light"] .topbar {
+  background: #FFFFFF !important;
+  border-color: rgba(0, 0, 0, 0.08) !important;
+}
+
+:root[data-theme="light"] .topbar-title {
+  color: #1A1A1A !important;
+}
+
+/* 图标按钮 */
+:root[data-theme="light"] .icon-nav-btn {
+  color: #6B7280 !important;
+}
+
+:root[data-theme="light"] .icon-nav-btn:hover {
+  background: rgba(37, 99, 235, 0.08) !important;
+  color: #2563EB !important;
+}
+
+:root[data-theme="light"] .icon-nav-btn.active {
+  background: rgba(37, 99, 235, 0.1) !important;
+  color: #2563EB !important;
+}
+
+/* Toast通知 */
+:root[data-theme="light"] .toast {
+  background: #FFFFFF !important;
+  border-color: rgba(37, 99, 235, 0.3) !important;
+  color: #1A1A1A !important;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.15) !important;
+}
+
+/* 广告组件 */
+:root[data-theme="light"] .ad-panel {
+  background: #FFFFFF !important;
+  border-color: rgba(37, 99, 235, 0.3) !important;
+}
+
+:root[data-theme="light"] .ad-panel:hover {
+  border-color: rgba(37, 99, 235, 0.5) !important;
+  box-shadow: 0 4px 12px rgba(37, 99, 235, 0.15) !important;
+}
+
+:root[data-theme="light"] .ad-panel-title {
+  color: #1A1A1A !important;
+}
+
+:root[data-theme="light"] .ad-panel-desc {
+  color: #6B7280 !important;
+}
+
+:root[data-theme="light"] .ad-panel-icon {
+  color: #2563EB !important;
+}
+
+
+/* 工作区面板按钮 - 重构版 */
+:root[data-theme="light"] .panel-icon-btn {
+  background: transparent !important;
+  color: #666666;
+}
+
+:root[data-theme="light"] .panel-icon-btn:hover {
+  background: rgba(37, 99, 235, 0.08) !important;
+  color: #2563EB;
+}
+
+:root[data-theme="light"] .panel-icon-btn:active {
+  background: rgba(37, 99, 235, 0.12) !important;
+}
+
+:root[data-theme="light"] .panel-icon-btn:disabled {
+  color: #CCCCCC;
+}
+
+:root[data-theme="light"] .close-preview {
+  background: transparent !important;
+  color: #666666;
+}
+
+:root[data-theme="light"] .close-preview:hover {
+  background: rgba(37, 99, 235, 0.08) !important;
+  color: #2563EB;
+}

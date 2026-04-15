@@ -11,6 +11,7 @@ Discovery order for all paths:
 
 import collections
 import json
+import logging
 import os
 import sys
 import threading
@@ -47,6 +48,8 @@ SESSION_INDEX_FILE = SESSION_DIR / "_index.json"
 SETTINGS_FILE = STATE_DIR / "settings.json"
 LAST_WORKSPACE_FILE = STATE_DIR / "last_workspace.txt"
 PROJECTS_FILE = STATE_DIR / "projects.json"
+
+logger = logging.getLogger(__name__)
 
 
 # ── Hermes agent directory discovery ─────────────────────────────────────────
@@ -197,7 +200,7 @@ def reload_config() -> None:
                 if isinstance(loaded, dict):
                     _cfg_cache.update(loaded)
         except Exception:
-            pass
+            logger.debug("Failed to load yaml config from %s", config_path)
 
 
 # Initial load
@@ -206,21 +209,70 @@ cfg = _cfg_cache  # alias for backward compat with existing references
 
 
 # ── Default workspace discovery ───────────────────────────────────────────────
+def _workspace_candidates(raw: str | Path | None = None) -> list[Path]:
+    """Return ordered candidate workspace paths, de-duplicated."""
+    candidates: list[Path] = []
+
+    def add(candidate: str | Path | None) -> None:
+        if candidate in (None, ""):
+            return
+        try:
+            path = Path(candidate).expanduser().resolve()
+        except Exception:
+            return
+        if path not in candidates:
+            candidates.append(path)
+
+    add(raw)
+    if os.getenv("HERMES_WEBUI_DEFAULT_WORKSPACE"):
+        add(os.getenv("HERMES_WEBUI_DEFAULT_WORKSPACE"))
+
+    home_workspace = HOME / "workspace"
+    home_work = HOME / "work"
+    if home_workspace.exists():
+        add(home_workspace)
+    if home_work.exists():
+        add(home_work)
+
+    add(home_workspace)
+    add(STATE_DIR / "workspace")
+    return candidates
+
+
+
+def _ensure_workspace_dir(path: Path) -> bool:
+    """Best-effort check that a workspace directory exists and is writable."""
+    try:
+        path = path.expanduser().resolve()
+        path.mkdir(parents=True, exist_ok=True)
+        return path.is_dir() and os.access(path, os.R_OK | os.W_OK | os.X_OK)
+    except Exception:
+        return False
+
+
+
+def resolve_default_workspace(raw: str | Path | None = None) -> Path:
+    """Return the first usable workspace path, creating it when possible."""
+    for candidate in _workspace_candidates(raw):
+        if _ensure_workspace_dir(candidate):
+            return candidate
+    raise RuntimeError(
+        "Could not create or access any usable workspace directory. "
+        "Set HERMES_WEBUI_DEFAULT_WORKSPACE to a writable path."
+    )
+
+
+
 def _discover_default_workspace() -> Path:
     """
     Resolve the default workspace in order:
       1. HERMES_WEBUI_DEFAULT_WORKSPACE env var
-      2. ~/workspace (common Hermes convention)
-      3. STATE_DIR / workspace (isolated fallback)
+      2. ~/workspace if it already exists
+      3. ~/work if it already exists
+      4. ~/workspace (create if needed)
+      5. STATE_DIR / workspace
     """
-    if os.getenv("HERMES_WEBUI_DEFAULT_WORKSPACE"):
-        return Path(os.getenv("HERMES_WEBUI_DEFAULT_WORKSPACE")).expanduser().resolve()
-
-    common = HOME / "workspace"
-    if common.exists():
-        return common.resolve()
-
-    return (STATE_DIR / "workspace").resolve()
+    return resolve_default_workspace()
 
 
 DEFAULT_WORKSPACE = _discover_default_workspace()
@@ -354,8 +406,6 @@ CLI_TOOLSETS = get_config().get("platform_toolsets", {}).get("cli", _DEFAULT_TOO
 # Hardcoded fallback models (used when no config.yaml or agent is available)
 _FALLBACK_MODELS = [
     {"provider": "OpenAI", "id": "openai/gpt-5.4-mini", "label": "GPT-5.4 Mini"},
-    {"provider": "OpenAI", "id": "openai/gpt-4o", "label": "GPT-4o"},
-    {"provider": "OpenAI", "id": "openai/o3", "label": "o3"},
     {"provider": "OpenAI", "id": "openai/o4-mini", "label": "o4-mini"},
     {
         "provider": "Anthropic",
@@ -398,6 +448,8 @@ _PROVIDER_DISPLAY = {
     "huggingface": "HuggingFace",
     "alibaba": "Alibaba",
     "ollama": "Ollama",
+    "opencode-zen": "OpenCode Zen",
+    "opencode-go": "OpenCode Go",
     "lmstudio": "LM Studio",
 }
 
@@ -411,12 +463,16 @@ _PROVIDER_MODELS = {
     ],
     "openai": [
         {"id": "gpt-5.4-mini", "label": "GPT-5.4 Mini"},
-        {"id": "gpt-4o", "label": "GPT-4o"},
-        {"id": "o3", "label": "o3"},
         {"id": "o4-mini", "label": "o4-mini"},
     ],
     "openai-codex": [
-        {"id": "codex-mini-latest", "label": "Codex Mini"},
+        {"id": "gpt-5.4", "label": "GPT-5.4"},
+        {"id": "gpt-5.4-mini", "label": "GPT-5.4 Mini"},
+        {"id": "gpt-5.3-codex", "label": "GPT-5.3 Codex"},
+        {"id": "gpt-5.2-codex", "label": "GPT-5.2 Codex"},
+        {"id": "gpt-5.1-codex-max", "label": "GPT-5.1 Codex Max"},
+        {"id": "gpt-5.1-codex-mini", "label": "GPT-5.1 Codex Mini"},
+        {"id": "codex-mini-latest", "label": "Codex Mini (latest)"},
     ],
     "google": [
         {"id": "gemini-2.5-pro", "label": "Gemini 2.5 Pro"},
@@ -460,6 +516,51 @@ _PROVIDER_MODELS = {
         {"id": "claude-opus-4.6", "label": "Claude Opus 4.6"},
         {"id": "claude-sonnet-4.6", "label": "Claude Sonnet 4.6"},
         {"id": "gemini-2.5-pro", "label": "Gemini 2.5 Pro"},
+    ],
+    # OpenCode Zen — curated models via opencode.ai/zen (pay-as-you-go credits)
+    "opencode-zen": [
+        {"id": "gpt-5.4-pro", "label": "GPT-5.4 Pro"},
+        {"id": "gpt-5.4", "label": "GPT-5.4"},
+        {"id": "gpt-5.4-mini", "label": "GPT-5.4 Mini"},
+        {"id": "gpt-5.4-nano", "label": "GPT-5.4 Nano"},
+        {"id": "gpt-5.3-codex", "label": "GPT-5.3 Codex"},
+        {"id": "gpt-5.3-codex-spark", "label": "GPT-5.3 Codex Spark"},
+        {"id": "gpt-5.2", "label": "GPT-5.2"},
+        {"id": "gpt-5.2-codex", "label": "GPT-5.2 Codex"},
+        {"id": "gpt-5.1", "label": "GPT-5.1"},
+        {"id": "gpt-5.1-codex", "label": "GPT-5.1 Codex"},
+        {"id": "gpt-5.1-codex-max", "label": "GPT-5.1 Codex Max"},
+        {"id": "gpt-5.1-codex-mini", "label": "GPT-5.1 Codex Mini"},
+        {"id": "gpt-5", "label": "GPT-5"},
+        {"id": "gpt-5-codex", "label": "GPT-5 Codex"},
+        {"id": "gpt-5-nano", "label": "GPT-5 Nano"},
+        {"id": "claude-opus-4-6", "label": "Claude Opus 4.6"},
+        {"id": "claude-opus-4-5", "label": "Claude Opus 4.5"},
+        {"id": "claude-opus-4-1", "label": "Claude Opus 4.1"},
+        {"id": "claude-sonnet-4-6", "label": "Claude Sonnet 4.6"},
+        {"id": "claude-sonnet-4-5", "label": "Claude Sonnet 4.5"},
+        {"id": "claude-sonnet-4", "label": "Claude Sonnet 4"},
+        {"id": "claude-haiku-4-5", "label": "Claude Haiku 4.5"},
+        {"id": "claude-3-5-haiku", "label": "Claude 3.5 Haiku"},
+        {"id": "gemini-3.1-pro", "label": "Gemini 3.1 Pro"},
+        {"id": "gemini-3-flash", "label": "Gemini 3 Flash"},
+        {"id": "glm-5.1", "label": "GLM-5.1"},
+        {"id": "glm-5", "label": "GLM-5"},
+        {"id": "kimi-k2.5", "label": "Kimi K2.5"},
+        {"id": "minimax-m2.5", "label": "MiniMax M2.5"},
+        {"id": "minimax-m2.5-free", "label": "MiniMax M2.5 Free"},
+        {"id": "nemotron-3-super-free", "label": "Nemotron 3 Super Free"},
+        {"id": "big-pickle", "label": "Big Pickle"},
+    ],
+    # OpenCode Go — flat-rate models via opencode.ai/go ($10/month)
+    "opencode-go": [
+        {"id": "glm-5.1", "label": "GLM-5.1"},
+        {"id": "glm-5", "label": "GLM-5"},
+        {"id": "kimi-k2.5", "label": "Kimi K2.5"},
+        {"id": "mimo-v2-pro", "label": "MiMo V2 Pro"},
+        {"id": "mimo-v2-omni", "label": "MiMo V2 Omni"},
+        {"id": "minimax-m2.7", "label": "MiniMax M2.7"},
+        {"id": "minimax-m2.5", "label": "MiniMax M2.5"},
     ],
     # 'gemini' is the hermes_cli provider ID for Google AI Studio
     "gemini": [
@@ -536,7 +637,10 @@ def resolve_model_provider(model_id: str) -> tuple:
         # just because the model name contains a slash (e.g. google/gemma-4-26b-a4b).
         # The user has explicitly pointed at a base_url, so trust their routing config.
         if config_base_url:
-            return model_id, config_provider, config_base_url
+            # Strip provider prefix (e.g. 'openai/gpt-5.4' -> 'gpt-5.4') so prefixed
+            # model IDs from previous sessions don't break custom endpoint routing.
+            bare_model = model_id.split('/', 1)[-1]
+            return bare_model, config_provider, config_base_url
         # If prefix does NOT match config provider, the user picked a cross-provider model
         # from the OpenRouter dropdown (e.g. config=anthropic but picked openai/gpt-5.4-mini).
         # In this case always route through openrouter with the full provider/model string.
@@ -601,7 +705,7 @@ def get_available_models() -> dict:
                 auth_store = _j.loads(auth_store_path.read_text())
                 active_provider = auth_store.get("active_provider")
             except Exception:
-                pass
+                logger.debug("Failed to load auth store from %s", auth_store_path)
 
     # 4. Detect available providers.
     # Primary: ask hermes-agent's auth layer — the authoritative source. It checks
@@ -629,11 +733,11 @@ def get_available_models() -> dict:
                 if _src == "gh auth token":
                     continue
             except Exception:
-                pass
+                logger.debug("Failed to get key source for provider %s", _p.get("id", "unknown"))
             detected_providers.add(_p["id"])
         _hermes_auth_used = True
     except Exception:
-        pass
+        logger.debug("Failed to detect auth providers from hermes")
 
     if not _hermes_auth_used:
         # Fallback: scan .env and os.environ for known API key variables
@@ -652,7 +756,7 @@ def get_available_models() -> dict:
                         k, v = line.split("=", 1)
                         env_keys[k.strip()] = v.strip().strip('"').strip("'")
             except Exception:
-                pass
+                logger.debug("Failed to parse hermes env file")
         all_env = {**env_keys}
         for k in (
             "ANTHROPIC_API_KEY",
@@ -662,6 +766,8 @@ def get_available_models() -> dict:
             "GLM_API_KEY",
             "KIMI_API_KEY",
             "DEEPSEEK_API_KEY",
+            "OPENCODE_ZEN_API_KEY",
+            "OPENCODE_GO_API_KEY",
         ):
             val = os.getenv(k)
             if val:
@@ -682,6 +788,10 @@ def get_available_models() -> dict:
             detected_providers.add("minimax")
         if all_env.get("DEEPSEEK_API_KEY"):
             detected_providers.add("deepseek")
+        if all_env.get("OPENCODE_ZEN_API_KEY"):
+            detected_providers.add("opencode-zen")
+        if all_env.get("OPENCODE_GO_API_KEY"):
+            detected_providers.add("opencode-go")
 
     # 3. Fetch models from custom endpoint if base_url is configured
     auto_detected_models = []
@@ -760,6 +870,9 @@ def get_available_models() -> dict:
             parsed_url = urlparse(
                 endpoint_url if "://" in endpoint_url else f"http://{endpoint_url}"
             )
+            # Validate URL scheme to prevent file:// and other dangerous schemes
+            if parsed_url.scheme not in ("", "http", "https"):
+                raise ValueError(f"Invalid URL scheme: {parsed_url.scheme}")
             if parsed_url.hostname:
                 try:
                     resolved_ips = socket.getaddrinfo(parsed_url.hostname, None)
@@ -791,7 +904,7 @@ def get_available_models() -> dict:
             req.add_header("User-Agent", "OpenAI/Python 1.0")
             for k, v in headers.items():
                 req.add_header(k, v)
-            with urllib.request.urlopen(req, timeout=10) as response:
+            with urllib.request.urlopen(req, timeout=10) as response:  # nosec B310
                 data = json.loads(response.read().decode("utf-8"))
 
             # Handle both OpenAI-compatible and llama.cpp response formats
@@ -814,7 +927,7 @@ def get_available_models() -> dict:
                     auto_detected_models.append({"id": model_id, "label": model_name})
                     detected_providers.add(provider.lower())
         except Exception:
-            pass  # custom endpoint unreachable or misconfigured -- fail silently
+            logger.debug("Custom endpoint unreachable or misconfigured for provider: %s", provider)
 
     # 3b. Include models from custom_providers config entries.
     # These are explicitly configured and should always appear even when the
@@ -836,8 +949,11 @@ def get_available_models() -> dict:
     # THAT provider, not to a separate "Custom" group. hermes_cli reports
     # 'custom' as authenticated whenever base_url is set, which would otherwise
     # build a phantom "Custom" bucket next to the real provider's group. Drop
-    # it unless the user explicitly chose 'custom' as their active provider.
-    if active_provider and active_provider != "custom":
+    # it unless (a) the user explicitly chose 'custom' as their active provider,
+    # or (b) the user has custom_providers entries in config.yaml (those models
+    # were already added above and should still be shown).
+    _has_custom_providers = isinstance(_custom_providers_cfg, list) and len(_custom_providers_cfg) > 0
+    if active_provider and active_provider != "custom" and not _has_custom_providers:
         detected_providers.discard("custom")
 
     # 5. Build model groups
@@ -1007,14 +1123,16 @@ _SETTINGS_DEFAULTS = {
     "sync_to_insights": False,  # mirror WebUI token usage to state.db for /insights
     "check_for_updates": True,  # check if webui/agent repos are behind upstream
     "theme": "dark",  # active UI theme name (no enum gate -- allows custom themes)
-    "language": "zh",  # UI locale code; must match a key in static/i18n.js LOCALES
+    "language": "en",  # UI locale code; must match a key in static/i18n.js LOCALES
     "bot_name": os.getenv(
         "HERMES_WEBUI_BOT_NAME", "Hermes"
     ),  # display name for the assistant
     "sound_enabled": False,  # play notification sound when assistant finishes
     "notifications_enabled": False,  # browser notification when tab is in background
+    "bubble_layout": False,  # right-aligned user / left-aligned assistant chat bubbles
     "password_hash": None,  # PBKDF2-HMAC-SHA256 hash; None = auth disabled
 }
+_SETTINGS_LEGACY_DROP_KEYS = {"assistant_language"}
 
 
 def load_settings() -> dict:
@@ -1024,9 +1142,15 @@ def load_settings() -> dict:
         try:
             stored = json.loads(SETTINGS_FILE.read_text(encoding="utf-8"))
             if isinstance(stored, dict):
-                settings.update(stored)
+                settings.update(
+                    {
+                        k: v
+                        for k, v in stored.items()
+                        if k not in _SETTINGS_LEGACY_DROP_KEYS
+                    }
+                )
         except Exception:
-            pass
+            logger.debug("Failed to load settings from %s", SETTINGS_FILE)
     return settings
 
 
@@ -1042,6 +1166,7 @@ _SETTINGS_BOOL_KEYS = {
     "check_for_updates",
     "sound_enabled",
     "notifications_enabled",
+    "bubble_layout",
 }
 # Language codes are validated as short alphanumeric BCP-47-like tags (e.g. 'en', 'zh', 'fr')
 _SETTINGS_LANG_RE = __import__("re").compile(r"^[a-zA-Z]{2,10}(-[a-zA-Z0-9]{2,8})?$")
@@ -1074,6 +1199,10 @@ def save_settings(settings: dict) -> dict:
             if k in _SETTINGS_BOOL_KEYS:
                 v = bool(v)
             current[k] = v
+
+    current["default_workspace"] = str(
+        resolve_default_workspace(current.get("default_workspace"))
+    )
     SETTINGS_FILE.write_text(
         json.dumps(current, ensure_ascii=False, indent=2),
         encoding="utf-8",
@@ -1083,7 +1212,7 @@ def save_settings(settings: dict) -> dict:
     if "default_model" in current:
         DEFAULT_MODEL = current["default_model"]
     if "default_workspace" in current:
-        DEFAULT_WORKSPACE = Path(current["default_workspace"]).expanduser().resolve()
+        DEFAULT_WORKSPACE = resolve_default_workspace(current["default_workspace"])
     return current
 
 
@@ -1092,10 +1221,18 @@ _startup_settings = load_settings()
 if SETTINGS_FILE.exists():
     if _startup_settings.get("default_model"):
         DEFAULT_MODEL = _startup_settings["default_model"]
-    if _startup_settings.get("default_workspace"):
-        DEFAULT_WORKSPACE = (
-            Path(_startup_settings["default_workspace"]).expanduser().resolve()
-        )
+    DEFAULT_WORKSPACE = resolve_default_workspace(
+        _startup_settings.get("default_workspace")
+    )
+    if _startup_settings.get("default_workspace") != str(DEFAULT_WORKSPACE):
+        _startup_settings["default_workspace"] = str(DEFAULT_WORKSPACE)
+        try:
+            SETTINGS_FILE.write_text(
+                json.dumps(_startup_settings, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+        except Exception:
+            pass
 
 # ── SESSIONS in-memory cache (LRU OrderedDict) ───────────────────────────────
 SESSIONS: collections.OrderedDict = collections.OrderedDict()

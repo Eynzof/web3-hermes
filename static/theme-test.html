@@ -1,0 +1,99 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Theme Test</title>
+  <style>
+    :root {
+      --bg: #1a1a1a;
+      --text: #ffffff;
+      --border: rgba(255,255,255,0.1);
+    }
+    
+    :root[data-theme="light"] {
+      --bg: #ffffff;
+      --text: #000000;
+      --border: rgba(0,0,0,0.1);
+    }
+    
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: system-ui, -apple-system, sans-serif;
+      padding: 40px;
+      transition: all 0.3s ease;
+    }
+    
+    .container {
+      max-width: 600px;
+      margin: 0 auto;
+      border: 2px solid var(--border);
+      padding: 30px;
+      border-radius: 12px;
+    }
+    
+    button {
+      background: var(--text);
+      color: var(--bg);
+      border: none;
+      padding: 12px 24px;
+      border-radius: 8px;
+      cursor: pointer;
+      font-size: 16px;
+      margin: 10px;
+    }
+    
+    .info {
+      margin-top: 20px;
+      padding: 15px;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>主题切换测试</h1>
+    <p>当前主题: <strong id="currentTheme">dark</strong></p>
+    <p>data-theme属性: <strong id="dataTheme">-</strong></p>
+    <p>localStorage值: <strong id="localStorageValue">-</strong></p>
+    
+    <div>
+      <button onclick="setTheme('dark')">切换到深色</button>
+      <button onclick="setTheme('light')">切换到浅色</button>
+    </div>
+    
+    <div class="info">
+      <h3>测试说明</h3>
+      <p>1. 点击按钮切换主题</p>
+      <p>2. 检查背景色和文字颜色是否改变</p>
+      <p>3. 刷新页面检查主题是否保持</p>
+    </div>
+  </div>
+  
+  <script>
+    function setTheme(theme) {
+      console.log('Setting theme to:', theme);
+      document.documentElement.dataset.theme = theme;
+      localStorage.setItem('hermes-theme', theme);
+      updateDisplay();
+    }
+    
+    function updateDisplay() {
+      const theme = document.documentElement.dataset.theme || 'dark';
+      const stored = localStorage.getItem('hermes-theme') || 'none';
+      document.getElementById('currentTheme').textContent = theme;
+      document.getElementById('dataTheme').textContent = theme;
+      document.getElementById('localStorageValue').textContent = stored;
+    }
+    
+    // 页面加载时恢复主题
+    window.addEventListener('DOMContentLoaded', () => {
+      const savedTheme = localStorage.getItem('hermes-theme') || 'dark';
+      document.documentElement.dataset.theme = savedTheme;
+      updateDisplay();
+    });
+  </script>
+</body>
+</html>

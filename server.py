@@ -3,10 +3,15 @@ Hermes Web UI -- Main server entry point.
 Thin routing shell: imports Handler, delegates to api/routes.py, runs server.
 All business logic lives in api/*.
 """
+import logging
+import socket
+import sys
 import time
 import traceback
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse
+
+logger = logging.getLogger(__name__)
 
 from api.auth import check_auth
 from api.config import HOST, PORT, STATE_DIR, SESSION_DIR, DEFAULT_WORKSPACE
@@ -15,9 +20,31 @@ from api.routes import handle_get, handle_post
 from api.startup import auto_install_agent_deps, fix_credential_permissions
 
 
+class QuietHTTPServer(ThreadingHTTPServer):
+    """Custom HTTP server that silently handles common network errors."""
+    
+    def handle_error(self, request, client_address):
+        """Override to suppress logging for common client disconnect errors."""
+        exc_type, exc_value, _ = sys.exc_info()
+        
+        # Silently ignore common connection errors caused by client disconnects
+        if exc_type in (ConnectionResetError, BrokenPipeError, ConnectionAbortedError):
+            return
+        
+        # Also handle socket errors that indicate client disconnect
+        if exc_type is socket.error:
+            # errno 54 is Connection reset by peer on macOS/BSD
+            # errno 104 is Connection reset by peer on Linux
+            if exc_value.errno in (54, 104, 32):  # ECONNRESET, EPIPE
+                return
+        
+        # For other errors, use default logging
+        super().handle_error(request, client_address)
+
+
 class Handler(BaseHTTPRequestHandler):
     timeout = 30  # seconds — kills idle/incomplete connections to prevent thread exhaustion
-    server_version = 'HermesWebUI/0.2'
+    server_version = 'HermesWebUI/0.50.38'
     def log_message(self, fmt, *args): pass  # suppress default Apache-style log
 
     def log_request(self, code: str='-', size: str='-') -> None:
@@ -118,7 +145,7 @@ def main() -> None:
     except Exception as e:
         print(f'[!!] WARNING: Gateway watcher failed to start: {e}', flush=True)
 
-    httpd = ThreadingHTTPServer((HOST, PORT), Handler)
+    httpd = QuietHTTPServer((HOST, PORT), Handler)
 
     # ── TLS/HTTPS setup (optional) ─────────────────────────────────────────
     from api.config import TLS_ENABLED, TLS_CERT, TLS_KEY
@@ -148,7 +175,7 @@ def main() -> None:
             from api.gateway_watcher import stop_watcher
             stop_watcher()
         except Exception:
-            pass
+            logger.debug("Failed to stop gateway watcher during shutdown")
 
 if __name__ == '__main__':
     main()

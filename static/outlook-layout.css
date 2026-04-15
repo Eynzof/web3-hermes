@@ -1,0 +1,214 @@
+/* Outlook-style Layout CSS */
+
+/* Main layout with icon nav on the left */
+.outlook-layout {
+  display: flex;
+  flex-direction: row;
+}
+
+/* Vertical icon navigation bar (leftmost column) */
+.icon-nav {
+  width: 72px;
+  background: var(--sidebar);
+  border-right: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 12px 0;
+  flex-shrink: 0;
+  z-index: 100;
+  position: relative;
+}
+
+.icon-nav-btn {
+  width: 56px;
+  height: 56px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  background: transparent;
+  border: none;
+  border-radius: 10px;
+  color: var(--muted);
+  cursor: pointer;
+  transition: all .2s ease;
+  margin-bottom: 4px;
+  position: relative;
+  padding: 8px 4px;
+}
+
+.icon-nav-btn svg {
+  flex-shrink: 0;
+}
+
+.icon-nav-label {
+  font-size: 10px;
+  font-weight: 500;
+  text-align: center;
+  line-height: 1.2;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.icon-nav-btn:hover {
+  background: var(--hover-bg);
+  color: var(--text);
+}
+
+.icon-nav-btn.active {
+  background: rgba(124, 185, 255, 0.12);
+  color: var(--blue);
+  position: relative;
+}
+
+.icon-nav-btn.active::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 3px;
+  height: 32px;
+  background: var(--blue);
+  border-radius: 0 2px 2px 0;
+}
+
+.icon-nav-spacer {
+  flex: 1;
+  min-height: 20px;
+}
+
+.icon-nav-settings {
+  margin-top: auto;
+  margin-bottom: 8px;
+}
+
+/* Adjust sidebar to work with icon nav */
+.outlook-layout .sidebar {
+  width: 300px;
+  border-right: 1px solid var(--border);
+}
+
+/* Hide old horizontal nav */
+.outlook-layout .sidebar-nav {
+  display: none;
+}
+
+/* Adjust main content area */
+.outlook-layout .main {
+  flex: 1;
+  min-width: 0;
+}
+
+/* Mobile Not Supported */
+@media (max-width: 768px) {
+  /* Hide all main content */
+  .outlook-layout {
+    display: none !important;
+  }
+  
+  /* Show not supported message */
+  .mobile-not-supported {
+    display: flex !important;
+  }
+}
+
+/* Desktop: hide not supported message */
+@media (min-width: 769px) {
+  .mobile-not-supported {
+    display: none;
+  }
+}
+
+/* Mobile not supported message styles */
+.mobile-not-supported {
+  display: none;
+  position: fixed;
+  inset: 0;
+  background: var(--bg);
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  z-index: 9999;
+}
+
+.mobile-not-supported-content {
+  text-align: center;
+  max-width: 400px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 20px;
+}
+
+.mobile-not-supported-content svg {
+  color: var(--muted);
+  opacity: 0.5;
+}
+
+.mobile-not-supported-content h2 {
+  font-size: 20px;
+  font-weight: 600;
+  color: var(--text);
+  margin: 0;
+  line-height: 1.4;
+}
+
+.mobile-not-supported-content p {
+  font-size: 14px;
+  color: var(--muted);
+  margin: 0;
+  line-height: 1.6;
+}
+
+/* Tablet and small desktop */
+@media (max-width: 1024px) and (min-width: 769px) {
+  .outlook-layout .sidebar {
+    width: 260px;
+  }
+}
+
+/* Theme-specific adjustments */
+:root[data-theme="light"] .icon-nav-btn {
+  color: #666666;
+}
+
+:root[data-theme="light"] .icon-nav-btn:hover {
+  background: rgba(0, 0, 0, 0.05);
+  color: #000000;
+}
+
+:root[data-theme="light"] .icon-nav-btn.active {
+  background: rgba(0, 102, 204, 0.12);
+  color: #0066cc;
+}
+
+:root[data-theme="light"] .icon-nav-btn.active::before {
+  background: #0066cc;
+}
+
+:root[data-theme="light"] .icon-nav-label {
+  color: inherit;
+}
+
+/* Smooth transitions */
+.icon-nav-btn,
+.icon-nav-btn::before {
+  transition: all .2s ease;
+}
+
+/* Focus states for accessibility */
+.icon-nav-btn:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+
+/* Ensure proper stacking */
+.outlook-layout {
+  position: relative;
+  isolation: isolate;
+}

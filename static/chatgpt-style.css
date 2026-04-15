@@ -1,0 +1,479 @@
+/* ChatGPT风格的消息组件样式 */
+
+/* ========== 消息容器 ========== */
+.messages {
+  background: var(--bg);
+  overflow-y: auto;
+  padding: 0;
+}
+
+.messages-inner {
+  max-width: 800px;
+  margin: 0 auto;
+  padding: 24px 24px 80px;
+}
+
+/* ========== 消息行 ========== */
+.msg-row {
+  display: flex;
+  flex-direction: column;
+  margin-bottom: 20px;
+  padding-bottom: 20px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+  animation: fadeInUp 0.3s ease-out;
+}
+
+.msg-row:last-child {
+  border-bottom: none;
+  padding-bottom: 0;
+}
+
+/* 用户消息 */
+.msg-row.user {
+  align-items: flex-end;
+}
+
+/* 助手消息 */
+.msg-row.assistant {
+  align-items: flex-start;
+}
+
+/* ========== 消息头部 ========== */
+.msg-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 10px;
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.msg-avatar {
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 16px;
+  font-weight: 600;
+  flex-shrink: 0;
+}
+
+/* 用户头像 */
+.msg-row.user .msg-avatar {
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  color: white;
+  box-shadow: 0 2px 8px rgba(102, 126, 234, 0.3);
+}
+
+/* 助手头像 */
+.msg-row.assistant .msg-avatar {
+  background: linear-gradient(135deg, #10b981 0%, #059669 100%);
+  color: white;
+  box-shadow: 0 2px 8px rgba(16, 185, 129, 0.3);
+}
+
+/* ========== 消息主体 ========== */
+.msg-body {
+  background: transparent;
+  border-radius: 10px;
+  padding: 14px 18px;
+  max-width: 100%;
+  word-wrap: break-word;
+  line-height: 1.6;
+  font-size: 15px;
+  transition: all 0.2s ease;
+}
+
+/* 用户消息样式 - 更明显的边框和背景 */
+.msg-row.user .msg-body {
+  background: rgba(124, 185, 255, 0.1);
+  border: 2px solid rgba(124, 185, 255, 0.5);
+  color: var(--text);
+  box-shadow: 0 2px 6px rgba(124, 185, 255, 0.12);
+}
+
+.msg-row.user .msg-body:hover {
+  border-color: rgba(124, 185, 255, 0.7);
+  box-shadow: 0 3px 10px rgba(124, 185, 255, 0.18);
+  background: rgba(124, 185, 255, 0.12);
+}
+
+/* 助手消息样式 - 更明显的边框和背景 */
+.msg-row.assistant .msg-body {
+  background: rgba(255, 255, 255, 0.03);
+  border: 2px solid rgba(255, 255, 255, 0.2);
+  color: var(--text);
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.12);
+}
+
+.msg-row.assistant .msg-body:hover {
+  border-color: rgba(255, 255, 255, 0.3);
+  background: rgba(255, 255, 255, 0.05);
+  box-shadow: 0 3px 10px rgba(0, 0, 0, 0.18);
+}
+
+/* ========== 思考过程组件 ========== */
+.thinking-card {
+  background: rgba(255, 165, 0, 0.08);
+  border: 1.5px solid rgba(255, 165, 0, 0.3);
+  border-radius: 10px;
+  padding: 14px;
+  margin: 8px 0;
+  transition: all 0.3s ease;
+  box-shadow: 0 2px 8px rgba(255, 165, 0, 0.1);
+}
+
+.thinking-card:hover {
+  border-color: rgba(255, 165, 0, 0.5);
+  box-shadow: 0 3px 10px rgba(255, 165, 0, 0.18);
+  background: rgba(255, 165, 0, 0.1);
+}
+
+.thinking-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  cursor: pointer;
+  user-select: none;
+}
+
+.thinking-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 14px;
+  font-weight: 600;
+  color: #ffa500;
+  font-family: inherit;
+}
+
+.thinking-icon {
+  width: 18px;
+  height: 18px;
+  animation: spin 2s linear infinite;
+}
+
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+.thinking-toggle {
+  width: 20px;
+  height: 20px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #ffa500;
+  transition: transform 0.3s ease;
+}
+
+.thinking-card.collapsed .thinking-toggle {
+  transform: rotate(-90deg);
+}
+
+.thinking-content {
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid rgba(255, 165, 0, 0.15);
+  font-size: 14px;
+  line-height: 1.5;
+  color: var(--text);
+  opacity: 0.9;
+  font-family: inherit;
+}
+
+.thinking-card.collapsed .thinking-content {
+  display: none;
+}
+
+/* ========== 代码块优化 ========== */
+.msg-body pre {
+  background: rgba(0, 0, 0, 0.45);
+  border: 1.5px solid rgba(255, 255, 255, 0.15);
+  border-radius: 8px;
+  padding: 14px;
+  margin: 10px 0;
+  overflow-x: auto;
+  font-family: var(--font-mono);
+  font-size: 13px;
+  line-height: 1.5;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.25);
+}
+
+.msg-body code {
+  background: rgba(0, 0, 0, 0.35);
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-family: var(--font-mono);
+  font-size: 13px;
+}
+
+.msg-body pre code {
+  background: transparent;
+  border: none;
+  padding: 0;
+}
+
+/* ========== 消息操作按钮 ========== */
+.msg-actions {
+  display: flex;
+  gap: 4px;
+  margin-top: 8px;
+  opacity: 0;
+  transition: opacity 0.2s ease;
+}
+
+.msg-row:hover .msg-actions {
+  opacity: 1;
+}
+
+.msg-action-btn {
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 8px;
+  padding: 6px 10px;
+  font-size: 12px;
+  color: var(--muted);
+  cursor: pointer;
+  transition: all 0.2s ease;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-height: 28px;
+  white-space: nowrap;
+}
+
+.msg-action-btn:hover {
+  background: rgba(255, 255, 255, 0.1);
+  border-color: rgba(255, 255, 255, 0.2);
+  color: var(--text);
+}
+
+.msg-action-btn svg {
+  width: 14px;
+  height: 14px;
+}
+
+/* ========== 加载动画 ========== */
+.loading-dots {
+  display: inline-flex;
+  gap: 4px;
+  align-items: center;
+}
+
+.loading-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--muted);
+  animation: pulse 1.4s ease-in-out infinite;
+}
+
+.loading-dot:nth-child(2) {
+  animation-delay: 0.2s;
+}
+
+.loading-dot:nth-child(3) {
+  animation-delay: 0.4s;
+}
+
+@keyframes pulse {
+  0%, 80%, 100% {
+    opacity: 0.3;
+    transform: scale(0.8);
+  }
+  40% {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+/* ========== 响应式设计 ========== */
+@media (max-width: 768px) {
+  .messages-inner {
+    padding: 16px 16px 80px;
+  }
+  
+  .msg-body {
+    padding: 12px 14px;
+    font-size: 14px;
+  }
+  
+  .thinking-card,
+  .tool-card {
+    padding: 12px;
+    margin: 6px 0;
+  }
+}
+
+/* ========== 浅色主题适配 ========== */
+:root[data-theme="light"] .msg-row {
+  border-bottom-color: rgba(0, 0, 0, 0.08);
+}
+
+:root[data-theme="light"] .msg-row.user .msg-body {
+  background: rgba(0, 102, 204, 0.08);
+  border: 2px solid rgba(0, 102, 204, 0.5);
+  box-shadow: 0 2px 6px rgba(0, 102, 204, 0.1);
+  color: #000000;
+}
+
+:root[data-theme="light"] .msg-row.user .msg-body:hover {
+  border-color: rgba(0, 102, 204, 0.7);
+  box-shadow: 0 3px 10px rgba(0, 102, 204, 0.15);
+  background: rgba(0, 102, 204, 0.12);
+}
+
+:root[data-theme="light"] .msg-row.assistant .msg-body {
+  background: rgba(0, 0, 0, 0.03);
+  border: 2px solid rgba(0, 0, 0, 0.25);
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.05);
+  color: #000000;
+}
+
+:root[data-theme="light"] .msg-row.assistant .msg-body:hover {
+  border-color: rgba(0, 0, 0, 0.35);
+  background: rgba(0, 0, 0, 0.05);
+  box-shadow: 0 3px 10px rgba(0, 0, 0, 0.08);
+}
+
+:root[data-theme="light"] .thinking-card {
+  background: rgba(245, 166, 35, 0.12);
+  border-color: rgba(245, 166, 35, 0.4);
+  box-shadow: 0 2px 6px rgba(245, 166, 35, 0.12);
+}
+
+:root[data-theme="light"] .thinking-card:hover {
+  border-color: rgba(245, 166, 35, 0.55);
+  box-shadow: 0 3px 10px rgba(245, 166, 35, 0.18);
+  background: rgba(245, 166, 35, 0.15);
+}
+
+:root[data-theme="light"] .thinking-title {
+  color: #d97706;
+}
+
+:root[data-theme="light"] .thinking-content {
+  color: #000000;
+}
+
+:root[data-theme="light"] .tool-card {
+  background: rgba(0, 102, 204, 0.08);
+  border-color: rgba(0, 102, 204, 0.3);
+  box-shadow: 0 2px 6px rgba(0, 102, 204, 0.1);
+}
+
+:root[data-theme="light"] .tool-card:hover {
+  border-color: rgba(0, 102, 204, 0.45);
+  box-shadow: 0 3px 10px rgba(0, 102, 204, 0.15);
+  background: rgba(0, 102, 204, 0.12);
+}
+
+:root[data-theme="light"] .tool-card-name {
+  color: #0066cc;
+}
+
+:root[data-theme="light"] .tool-card-preview {
+  color: #666666;
+}
+
+:root[data-theme="light"] .msg-body pre {
+  background: rgba(0, 0, 0, 0.06);
+  border-color: rgba(0, 0, 0, 0.2);
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.05);
+  color: #000000;
+}
+
+:root[data-theme="light"] .msg-body code {
+  background: rgba(0, 0, 0, 0.08);
+  border-color: rgba(0, 0, 0, 0.2);
+  color: #c7254e;
+}
+
+:root[data-theme="light"] .tool-section-content {
+  background: rgba(0, 0, 0, 0.04);
+  border-color: rgba(0, 0, 0, 0.15);
+  color: #000000;
+}
+
+/* ========== 滚动优化 ========== */
+.messages {
+  scroll-behavior: smooth;
+}
+
+.messages::-webkit-scrollbar {
+  width: 8px;
+}
+
+.messages::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.messages::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.15);
+  border-radius: 4px;
+}
+
+.messages::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.25);
+}
+
+/* ========== 动画效果 ========== */
+@keyframes fadeInUp {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* ========== Token使用信息 ========== */
+.msg-usage {
+  font-size: 11px;
+  color: var(--muted);
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid rgba(255, 255, 255, 0.05);
+  display: flex;
+  gap: 12px;
+}
+
+.msg-usage-item {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+/* ========== 附件显示 ========== */
+.msg-attachments {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.msg-attachment {
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 8px;
+  padding: 8px 12px;
+  font-size: 13px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text);
+}
+
+.msg-attachment svg {
+  width: 16px;
+  height: 16px;
+  color: var(--muted);
+}

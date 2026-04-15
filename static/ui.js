@@ -1,7 +1,28 @@
 const S={session:null,messages:[],entries:[],busy:false,pendingFiles:[],toolCalls:[],activeStreamId:null,currentDir:'.',activeProfile:'default'};
 const INFLIGHT={};  // keyed by session_id while request in-flight
-const MSG_QUEUE=[];  // messages queued while a request is in-flight
+const SESSION_QUEUES={};  // keyed by session_id for queued follow-up turns
 const $=id=>document.getElementById(id);
+function _getSessionQueue(sid, create=false){
+  if(!sid) return [];
+  if(!SESSION_QUEUES[sid]&&create) SESSION_QUEUES[sid]=[];
+  return SESSION_QUEUES[sid]||[];
+}
+function queueSessionMessage(sid, payload){
+  if(!sid||!payload) return 0;
+  const q=_getSessionQueue(sid,true);
+  q.push(payload);
+  return q.length;
+}
+function shiftQueuedSessionMessage(sid){
+  const q=_getSessionQueue(sid,false);
+  if(!q.length) return null;
+  const next=q.shift();
+  if(!q.length) delete SESSION_QUEUES[sid];
+  return next;
+}
+function getQueuedSessionCount(sid){
+  return _getSessionQueue(sid,false).length;
+}
 const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 
 // Dynamic model labels -- populated by populateModelDropdown(), fallback to static map
@@ -68,10 +89,67 @@ async function populateModelDropdown(){
       _applyModelToDropdown(data.default_model, sel);
     }
     if(typeof syncModelChip==='function') syncModelChip();
+    // Kick off a background live-model fetch for the active provider.
+    // This runs after the static list is already shown (no blocking flicker).
+    if(data.active_provider) _fetchLiveModels(data.active_provider, sel);
   }catch(e){
     // API unavailable -- keep the hardcoded HTML options as fallback
     console.warn('Failed to load models from server:',e.message);
     if(typeof syncModelChip==='function') syncModelChip();
+  }
+}
+
+// Cache so we don't re-fetch on every page load
+const _liveModelCache={};
+
+async function _fetchLiveModels(provider, sel){
+  if(!provider||!sel) return;
+  // Don't fetch for providers where we know it's unsupported or unnecessary
+  // All providers now supported via agent's provider_model_ids() — no exclusions needed
+  if(_liveModelCache[provider]) return; // already fetched this session
+  try{
+    const url=new URL('/api/models/live',location.origin);
+    url.searchParams.set('provider',provider);
+    const data=await fetch(url.href,{credentials:'include'}).then(r=>r.json());
+    if(!data.models||!data.models.length) return;
+    _liveModelCache[provider]=data.models;
+    // Remember current selection before rebuilding options
+    const currentVal=sel.value;
+    // Rebuild the optgroup for this provider with live models
+    // Keep other providers' optgroups intact
+    let providerGroup=null;
+    for(const og of sel.querySelectorAll('optgroup')){
+      if(og.label&&og.label.toLowerCase().includes(provider.toLowerCase())){
+        providerGroup=og; break;
+      }
+    }
+    if(!providerGroup){
+      // No existing group — add a new one
+      providerGroup=document.createElement('optgroup');
+      providerGroup.label=provider.charAt(0).toUpperCase()+provider.slice(1)+' (live)';
+      sel.appendChild(providerGroup);
+    }
+    // Rebuild options from live data
+    const existingIds=new Set([...sel.options].map(o=>o.value));
+    let added=0;
+    for(const m of data.models){
+      if(existingIds.has(m.id)) continue; // already shown from static list
+      const opt=document.createElement('option');
+      opt.value=m.id;
+      opt.textContent=m.label||m.id;
+      opt.title='Live model — fetched from provider';
+      providerGroup.appendChild(opt);
+      _dynamicModelLabels[m.id]=m.label||m.id;
+      added++;
+    }
+    if(added>0){
+      // Restore selection
+      if(currentVal) _applyModelToDropdown(currentVal, sel);
+      if(typeof syncModelChip==='function') syncModelChip();
+      console.log('[hermes] Live models loaded for',provider+':',added,'new models added');
+    }
+  }catch(e){
+    console.debug('[hermes] Live model fetch failed for',provider,e.message);
   }
 }
 
@@ -160,11 +238,37 @@ function renderModelDropdown(){
       dd.appendChild(row);
     }
   }
+  // Custom model ID input — lets users type any model not in the curated list
+  const _custSep=document.createElement('div');
+  _custSep.className='model-group model-custom-sep';
+  _custSep.textContent=t('model_custom_label')||'Custom model ID';
+  dd.appendChild(_custSep);
+  const _custRow=document.createElement('div');
+  _custRow.className='model-custom-row';
+  _custRow.innerHTML=`<input class="model-custom-input" type="text" placeholder="${esc(t('model_custom_placeholder')||'e.g. openai/gpt-5.4')}" spellcheck="false" autocomplete="off"><button class="model-custom-btn" title="Use this model">${li('plus',12)}</button>`;
+  const _ci=_custRow.querySelector('.model-custom-input');
+  const _cb=_custRow.querySelector('.model-custom-btn');
+  const _applyCustom=()=>{const v=_ci.value.trim();if(!v)return;selectModelFromDropdown(v);_ci.value='';};
+  _cb.onclick=_applyCustom;
+  _ci.addEventListener('keydown',e=>{if(e.key==='Enter'){e.preventDefault();_applyCustom();}if(e.key==='Escape'){closeModelDropdown();}});
+  _ci.addEventListener('click',e=>e.stopPropagation());
+  dd.appendChild(_custRow);
 }
 
 async function selectModelFromDropdown(value){
   const sel=$('modelSelect');
   if(!sel||sel.value===value) { closeModelDropdown(); return; }
+  // If the value isn't in the option list (custom model ID), add a temporary option
+  // so sel.value assignment succeeds and the model chip shows the custom ID.
+  if(!Array.from(sel.options).some(o=>o.value===value)){
+    const opt=document.createElement('option');
+    opt.value=value;
+    opt.textContent=value.split('/').pop()||value;
+    opt.dataset.custom='1';
+    // Remove any previous custom option before adding new one
+    sel.querySelectorAll('option[data-custom]').forEach(o=>o.remove());
+    sel.appendChild(opt);
+  }
   sel.value=value;
   syncModelChip();
   closeModelDropdown();
@@ -295,6 +399,17 @@ function getModelLabel(modelId){
 
 function renderMd(raw){
   let s=raw||'';
+  // ── MEDIA: token stash (must run first, before any other processing) ───────
+  // Detect MEDIA:<path-or-url> tokens emitted by the agent (e.g. screenshots,
+  // generated images) and replace them with inline <img> or download links.
+  // Stashed so the path/URL is never processed as markdown.
+  const _IMAGE_EXTS=/\.(png|jpg|jpeg|gif|webp|bmp|ico)$/i;
+  const media_stash=[];
+  s=s.replace(/MEDIA:([^\s\)\]]+)/g,(_,raw_ref)=>{
+    media_stash.push(raw_ref);
+    return '\x00D'+(media_stash.length-1)+'\x00';
+  });
+  // ── End MEDIA stash ─────────────────────────────────────────────────────────
   // Pre-pass: decode HTML entities first so markdown processing works correctly.
   // This prevents double-escaping when LLM outputs entities like &lt; &gt; &amp;
   const decode=s=>s.replace(/&lt;/g,'<').replace(/&gt;/g,'>').replace(/&amp;/g,'&').replace(/&quot;/g,'"').replace(/&#39;/g,"'");
@@ -304,8 +419,21 @@ function renderMd(raw){
   // Only runs OUTSIDE fenced code blocks and backtick spans (stash + restore).
   // Unsafe tags (anything not in the allowlist) are left as-is and will be
   // HTML-escaped by esc() when they reach an innerHTML assignment -- no XSS risk.
+  // Fence stash: protect code blocks and backtick spans from all further processing
+  // Must run BEFORE math_stash so $..$ inside code spans is not extracted as math
   const fence_stash=[];
   s=s.replace(/(```[\s\S]*?```|`[^`\n]+`)/g,m=>{fence_stash.push(m);return '\x00F'+(fence_stash.length-1)+'\x00';});
+  // Math stash: protect $$..$$ and $..$ from markdown processing
+  // Runs AFTER fence_stash so backtick code spans protect their dollar-sign contents
+  const math_stash=[];
+  // Display math: $$...$$  (must come before inline to avoid mis-parsing)
+  s=s.replace(/\$\$([\s\S]+?)\$\$/g,(_,m)=>{math_stash.push({type:'display',src:m});return '\x00M'+(math_stash.length-1)+'\x00';});
+  // Inline math: $...$ — require non-space at boundaries to avoid false positives
+  // e.g. "costs $5 and $10" should not trigger (space after opening $)
+  s=s.replace(/\$([^\s$\n][^$\n]*?[^\s$\n]|\S)\$/g,(_,m)=>{math_stash.push({type:'inline',src:m});return '\x00M'+(math_stash.length-1)+'\x00';});
+  // Also stash \(...\) and \[...\] LaTeX delimiters
+  s=s.replace(/\\\\\((.+?)\\\\\)/g,(_,m)=>{math_stash.push({type:'inline',src:m});return '\x00M'+(math_stash.length-1)+'\x00';});
+  s=s.replace(/\\\\\[(.+?)\\\\\]/gs,(_,m)=>{math_stash.push({type:'display',src:m});return '\x00M'+(math_stash.length-1)+'\x00';});
   // Safe tag → markdown equivalent (these produce the same output as **text** etc.)
   s=s.replace(/<strong>([\s\S]*?)<\/strong>/gi,(_,t)=>'**'+t+'**');
   s=s.replace(/<b>([\s\S]*?)<\/b>/gi,(_,t)=>'**'+t+'**');
@@ -320,26 +448,52 @@ function renderMd(raw){
     const id='mermaid-'+Math.random().toString(36).slice(2,10);
     return `<div class="mermaid-block" data-mermaid-id="${id}">${esc(code.trim())}</div>`;
   });
-  s=s.replace(/```([\w+-]*)\n?([\s\S]*?)```/g,(_,lang,code)=>{const h=lang?`<div class="pre-header">${esc(lang)}</div>`:'';return `${h}<pre><code>${esc(code.replace(/\n$/,''))}</code></pre>`;});
+  s=s.replace(/```([\w+-]*)\n?([\s\S]*?)```/g,(_,lang,code)=>{
+    const normalizedLang=(lang||'').trim().toLowerCase();
+    const h=normalizedLang?`<div class="pre-header">${esc(normalizedLang)}</div>`:'';
+    const langAttr=normalizedLang?` class="language-${esc(normalizedLang)}"`:'';
+    return `${h}<pre><code${langAttr}>${esc(code.replace(/\n$/,''))}</code></pre>`;
+  });
   s=s.replace(/`([^`\n]+)`/g,(_,c)=>`<code>${esc(c)}</code>`);
   // inlineMd: process bold/italic/code/links within a single line of text.
   // Used inside list items and blockquotes where the text may already contain
   // HTML from the pre-pass → bold pipeline, so we cannot call esc() directly.
   function inlineMd(t){
+    // Stash backtick code spans first so bold/italic never esc() their content
+    const _code_stash=[];
+    t=t.replace(/`([^`\n]+)`/g,(_,x)=>{_code_stash.push(`<code>${esc(x)}</code>`);return `\x00C${_code_stash.length-1}\x00`;});
     t=t.replace(/\*\*\*(.+?)\*\*\*/g,(_,x)=>`<strong><em>${esc(x)}</em></strong>`);
     t=t.replace(/\*\*(.+?)\*\*/g,(_,x)=>`<strong>${esc(x)}</strong>`);
     t=t.replace(/\*([^*\n]+)\*/g,(_,x)=>`<em>${esc(x)}</em>`);
-    t=t.replace(/`([^`\n]+)`/g,(_,x)=>`<code>${esc(x)}</code>`);
-    t=t.replace(/\[([^\]]+)\]\((https?:\/\/[^\)]+)\)/g,(_,lb,u)=>`<a href="${esc(u)}" target="_blank" rel="noopener">${esc(lb)}</a>`);
+    // #487: Image pass — runs while code stash is active so ![x](url) inside
+    // backticks stays protected as a \x00C token and is never rendered as <img>.
+    // Must run before _code_stash restore and before _link_stash so the image
+    // is not consumed by the [label](url) link regex.
+    t=t.replace(/!\[([^\]]*)\]\((https?:\/\/[^\)]+)\)/g,(_,alt,url)=>`<img src="${url.replace(/"/g,'%22')}" alt="${esc(alt)}" class="msg-media-img" loading="lazy" onclick="this.classList.toggle('msg-media-img--full')">`);
+    // Stash rendered <img> tags so autolink never matches URLs inside src=
+    const _img_stash=[];
+    t=t.replace(/(<img\b[^>]*>)/g,m=>{_img_stash.push(m);return `\x00G${_img_stash.length-1}\x00`;});
+    t=t.replace(/\x00C(\d+)\x00/g,(_,i)=>_code_stash[+i]);
+    // Stash [label](url) links before autolink so the URL in href= is not re-linked
+    const _link_stash=[];
+    t=t.replace(/\[([^\]]+)\]\((https?:\/\/[^\)]+)\)/g,(_,lb,u)=>{_link_stash.push(`<a href="${u.replace(/"/g,'%22')}" target="_blank" rel="noopener">${esc(lb)}</a>`);return `\x00L${_link_stash.length-1}\x00`;});
+    t=t.replace(/(https?:\/\/[^\s<>"')\]]+)/g,(url)=>{const trail=url.match(/[.,;:!?)]$/)?url.slice(-1):'';const clean=trail?url.slice(0,-1):url;return `<a href="${clean}" target="_blank" rel="noopener">${esc(clean)}</a>${trail}`;});
+    t=t.replace(/\x00L(\d+)\x00/g,(_,i)=>_link_stash[+i]);
+    t=t.replace(/\x00G(\d+)\x00/g,(_,i)=>_img_stash[+i]);
     // Escape any plain text that isn't already wrapped in a tag we produced
-    // by escaping bare < > that aren't part of our own tags
-    const SAFE_INLINE=/^<\/?(strong|em|code|a)([\s>]|$)/i;
+    // by escaping bare < > that are not part of our own tags
+    const SAFE_INLINE=/^<\/?(strong|em|code|a|img)([\s>]|$)/i;
     t=t.replace(/<\/?[a-z][^>]*>/gi,tag=>SAFE_INLINE.test(tag)?tag:esc(tag));
     return t;
   }
+  // Stash <code> tags from the backtick pass above so the outer bold/italic
+  // regexes don't esc() their content (e.g. **`code`** → <strong><code>code</code></strong>)
+  const _ob_stash=[];
+  s=s.replace(/(<code>[^<]*<\/code>)/g,m=>{_ob_stash.push(m);return `\x00O${_ob_stash.length-1}\x00`;});
   s=s.replace(/\*\*\*(.+?)\*\*\*/g,(_,t)=>`<strong><em>${esc(t)}</em></strong>`);
   s=s.replace(/\*\*(.+?)\*\*/g,(_,t)=>`<strong>${esc(t)}</strong>`);
   s=s.replace(/\*([^*\n]+)\*/g,(_,t)=>`<em>${esc(t)}</em>`);
+  s=s.replace(/\x00O(\d+)\x00/g,(_,i)=>_ob_stash[+i]);
   s=s.replace(/^### (.+)$/gm,(_,t)=>`<h3>${inlineMd(t)}</h3>`).replace(/^## (.+)$/gm,(_,t)=>`<h2>${inlineMd(t)}</h2>`).replace(/^# (.+)$/gm,(_,t)=>`<h1>${inlineMd(t)}</h1>`);
   s=s.replace(/^---+$/gm,'<hr>');
   s=s.replace(/^> (.+)$/gm,(_,t)=>`<blockquote>${inlineMd(t)}</blockquote>`);
@@ -364,8 +518,9 @@ function renderMd(raw){
     }
     return html+'</ol>';
   });
-  s=s.replace(/\[([^\]]+)\]\((https?:\/\/[^\)]+)\)/g,(_,label,url)=>`<a href="${esc(url)}" target="_blank" rel="noopener">${esc(label)}</a>`);
   // Tables: | col | col | header row followed by | --- | --- | separator then data rows
+  // NOTE: table pass runs BEFORE outer link pass so [label](url) in table cells
+  // is handled by inlineMd() only — prevents double-linking.
   s=s.replace(/((?:^\|.+\|\n?)+)/gm,block=>{
     const rows=block.trim().split('\n').filter(r=>r.trim());
     if(rows.length<2)return block;
@@ -377,14 +532,65 @@ function renderMd(raw){
     const body=rows.slice(2).map(r=>`<tr>${parseRow(r)}</tr>`).join('');
     return `<table><thead>${header}</thead><tbody>${body}</tbody></table>`;
   });
+  // #487: Outer image pass — handles ![alt](url) in plain paragraphs (outside tables/lists).
+  // Runs AFTER the table pass (images in table cells are handled by inlineMd() above).
+  // Runs BEFORE the outer [label](url) link pass so the image is not consumed as a plain link.
+  s=s.replace(/!\[([^\]]*)\]\((https?:\/\/[^\)]+)\)/g,(_,alt,url)=>`<img src="${url.replace(/"/g,'%22')}" alt="${esc(alt)}" class="msg-media-img" loading="lazy" onclick="this.classList.toggle('msg-media-img--full')">`);
+  // Outer link pass for labeled links in plain paragraphs (outside table cells).
+  // Runs AFTER the table pass so table cells are processed by inlineMd() only.
+  // Stash existing <a> tags first to avoid re-linking already-linked URLs.
+  const _a_stash=[];
+  s=s.replace(/(<a\b[^>]*>[\s\S]*?<\/a>)/g,m=>{_a_stash.push(m);return `\x00A${_a_stash.length-1}\x00`;});
+  s=s.replace(/\[([^\]]+)\]\((https?:\/\/[^\)]+)\)/g,(_,label,url)=>`<a href="${url.replace(/"/g,'%22')}" target="_blank" rel="noopener">${esc(label)}</a>`);
+  s=s.replace(/\x00A(\d+)\x00/g,(_,i)=>_a_stash[+i]);
   // Escape any remaining HTML tags that are NOT from our own markdown output.
   // Our pipeline only emits: <strong>,<em>,<code>,<pre>,<h1-6>,<ul>,<ol>,<li>,
   // <table>,<thead>,<tbody>,<tr>,<th>,<td>,<hr>,<blockquote>,<p>,<br>,<a>,
   // <div class="..."> (mermaid/pre-header). Everything else is untrusted input.
-  const SAFE_TAGS=/^<\/?(strong|em|code|pre|h[1-6]|ul|ol|li|table|thead|tbody|tr|th|td|hr|blockquote|p|br|a|div)([\s>]|$)/i;
+  const SAFE_TAGS=/^<\/?(strong|em|code|pre|h[1-6]|ul|ol|li|table|thead|tbody|tr|th|td|hr|blockquote|p|br|a|img|div|span)([\s>]|$)/i;
   s=s.replace(/<\/?[a-z][^>]*>/gi,tag=>SAFE_TAGS.test(tag)?tag:esc(tag));
+  // Autolink: convert plain URLs to clickable links.
+  // Stash existing <a> tags first so we never re-link a URL already inside href="...".
+  const _al_stash=[];
+  s=s.replace(/(<a\b[^>]*>[\s\S]*?<\/a>|<img\b[^>]*>)/g,m=>{_al_stash.push(m);return `\x00B${_al_stash.length-1}\x00`;});
+  s=s.replace(/(https?:\/\/[^\s<>"'\)\]]+)/g,(url)=>{
+    // Strip trailing punctuation that was likely not part of the URL
+    const trail=url.match(/[.,;:!?)]$/)?url.slice(-1):'';
+    const clean=trail?url.slice(0,-1):url;
+    return `<a href="${clean}" target="_blank" rel="noopener">${esc(clean)}</a>${trail}`;
+  });
+  s=s.replace(/\x00B(\d+)\x00/g,(_,i)=>_al_stash[+i]);
+  // Restore math stash → katex placeholder spans/divs
+  // These will be rendered by renderKatexBlocks() after DOM insertion
+  s=s.replace(/\x00M(\d+)\x00/g,(_,i)=>{
+    const item=math_stash[+i];
+    if(item.type==='display'){
+      return `<div class="katex-block" data-katex="display">${esc(item.src)}</div>`;
+    }
+    return `<span class="katex-inline" data-katex="inline">${esc(item.src)}</span>`;
+  });
   const parts=s.split(/\n{2,}/);
   s=parts.map(p=>{p=p.trim();if(!p)return '';if(/^<(h[1-6]|ul|ol|pre|hr|blockquote)/.test(p))return p;return `<p>${p.replace(/\n/g,'<br>')}</p>`;}).join('\n');
+  // ── Restore MEDIA stash → inline images or download links ─────────────────
+  s=s.replace(/\x00D(\d+)\x00/g,(_,i)=>{
+    const ref=media_stash[+i];
+    // HTTP(S) URL
+    if(/^https?:\/\//i.test(ref)){
+      if(_IMAGE_EXTS.test(ref.split('?')[0])){
+        return `<img class="msg-media-img" src="${esc(ref)}" alt="image" loading="lazy" onclick="this.classList.toggle('msg-media-img--full')">`;
+      }
+      return `<a href="${esc(ref)}" target="_blank" rel="noopener">${esc(ref)}</a>`;
+    }
+    // Local file path
+    const apiUrl='/api/media?path='+encodeURIComponent(ref);
+    if(_IMAGE_EXTS.test(ref)){
+      return `<img class="msg-media-img" src="${esc(apiUrl)}" alt="${esc(ref.split('/').pop())}" loading="lazy" onclick="this.classList.toggle('msg-media-img--full')">`;
+    }
+    // Non-image local file — show download link with filename
+    const fname=esc(ref.split('/').pop()||ref);
+    return `<a class="msg-media-link" href="${esc(apiUrl+'&download=1')}" download="${fname}">📎 ${fname}</a>`;
+  });
+  // ── End MEDIA restore ──────────────────────────────────────────────────────
   return s;
 }
 
@@ -405,11 +611,43 @@ function setComposerStatus(t){
   el.style.display='';
 }
 
+let _composerLockState=null;
+
+function lockComposerForClarify(placeholderText){
+  const input=$('msg');
+  if(!input) return;
+  if(!_composerLockState){
+    _composerLockState={
+      disabled: input.disabled,
+      placeholder: input.placeholder,
+    };
+  }
+  input.disabled=true;
+  if(placeholderText) input.placeholder=placeholderText;
+  updateSendBtn();
+}
+
+function unlockComposerForClarify(){
+  const input=$('msg');
+  if(!input) return;
+  if(_composerLockState){
+    input.disabled=!!_composerLockState.disabled;
+    if(typeof _composerLockState.placeholder==='string'){
+      input.placeholder=_composerLockState.placeholder;
+    }
+    _composerLockState=null;
+  }else{
+    input.disabled=false;
+  }
+  updateSendBtn();
+}
+
 function updateSendBtn(){
   const btn=$('btnSend');
   if(!btn) return;
-  const hasContent=$('msg').value.trim().length>0||S.pendingFiles.length>0;
-  const canSend=hasContent&&!S.busy;
+  const msg=$('msg');
+  const hasContent=msg&&msg.value.trim().length>0||S.pendingFiles.length>0;
+  const canSend=hasContent&&!S.busy&&!(msg&&msg.disabled);
   // Hide while busy (cancel button takes its place); show otherwise
   btn.style.display=S.busy?'none':'';
   btn.disabled=!canSend;
@@ -426,28 +664,37 @@ function setBusy(v){
     setComposerStatus('');
     // Always hide Cancel button when not busy
     const _cb=$('btnCancel');if(_cb)_cb.style.display='none';
-    updateQueueBadge();
-    // Drain one queued message after UI settles
-    if(MSG_QUEUE.length>0){
-      const next=MSG_QUEUE.shift();
-      updateQueueBadge();
-      setTimeout(()=>{ $('msg').value=next; send(); }, 120);
+    const sid=S.session&&S.session.session_id;
+    updateQueueBadge(sid);
+    // Drain one queued message for the currently viewed session after UI settles
+    const next=sid?shiftQueuedSessionMessage(sid):null;
+    if(next){
+      updateQueueBadge(sid);
+      setTimeout(()=>{
+        $('msg').value=next.text||'';
+        S.pendingFiles=Array.isArray(next.files)?[...next.files]:[];
+        autoResize();
+        renderTray();
+        send();
+      },120);
     }
   }
 }
 
-function updateQueueBadge(){
+function updateQueueBadge(sessionId){
+  const sid=sessionId||(S.session&&S.session.session_id);
+  const count=sid?getQueuedSessionCount(sid):0;
   let badge=$('queueBadge');
-  if(MSG_QUEUE.length>0){
+  if(count>0){
     if(!badge){
       badge=document.createElement('div');
       badge.id='queueBadge';
       badge.style.cssText='position:fixed;bottom:80px;right:24px;background:rgba(124,185,255,.18);border:1px solid rgba(124,185,255,.4);color:var(--blue);font-size:12px;font-weight:600;padding:6px 14px;border-radius:20px;z-index:50;pointer-events:none;backdrop-filter:blur(8px);';
       document.body.appendChild(badge);
     }
-    badge.textContent=MSG_QUEUE.length===1?'1 message queued':`${MSG_QUEUE.length} messages queued`;
-  } else {
-    if(badge) badge.remove();
+    badge.textContent=count===1?'1 message queued':`${count} messages queued`;
+  } else if(badge) {
+    badge.remove();
   }
 }
 function showToast(msg,ms){const el=$('toast');el.textContent=msg;el.classList.add('show');clearTimeout(el._t);el._t=setTimeout(()=>el.classList.remove('show'),ms||2800);}
@@ -606,6 +853,47 @@ function copyMsg(btn){
 
 // ── Reconnect banner (B4/B5: reload resilience) ──
 const INFLIGHT_KEY = 'hermes-webui-inflight'; // localStorage key for in-flight session tracking
+const INFLIGHT_STATE_KEY = 'hermes-webui-inflight-state'; // localStorage snapshots for mid-stream reload recovery
+
+function _readInflightStateMap(){
+  try{
+    const raw=localStorage.getItem(INFLIGHT_STATE_KEY);
+    const parsed=raw?JSON.parse(raw):{};
+    return parsed&&typeof parsed==='object'?parsed:{};
+  }catch(_){
+    return {};
+  }
+}
+function saveInflightState(sid, state){
+  if(!sid||!state) return;
+  try{
+    const all=_readInflightStateMap();
+    all[sid]={...state,updated_at:Date.now()};
+    localStorage.setItem(INFLIGHT_STATE_KEY, JSON.stringify(all));
+  }catch(_){ }
+}
+function loadInflightState(sid, streamId){
+  if(!sid) return null;
+  const all=_readInflightStateMap();
+  const entry=all[sid];
+  if(!entry) return null;
+  if(streamId&&entry.streamId&&entry.streamId!==streamId) return null;
+  if(entry.updated_at&&Date.now()-entry.updated_at>10*60*1000){
+    clearInflightState(sid);
+    return null;
+  }
+  return entry;
+}
+function clearInflightState(sid){
+  if(!sid) return;
+  try{
+    const all=_readInflightStateMap();
+    if(!(sid in all)) return;
+    delete all[sid];
+    if(Object.keys(all).length) localStorage.setItem(INFLIGHT_STATE_KEY, JSON.stringify(all));
+    else localStorage.removeItem(INFLIGHT_STATE_KEY);
+  }catch(_){ }
+}
 
 function markInflight(sid, streamId) {
   localStorage.setItem(INFLIGHT_KEY, JSON.stringify({sid, streamId, ts: Date.now()}));
@@ -627,11 +915,11 @@ async function refreshSession() {
   try {
     const data = await api(`/api/session?session_id=${encodeURIComponent(S.session.session_id)}`);
     S.session = data.session;
-    S.messages = (data.session.messages || []).filter(m => {
-      if (!m || !m.role || m.role === 'tool') return false;
-      if (m.role === 'assistant') { let c = m.content || ''; if (Array.isArray(c)) c = c.map(p => p.text||'').join(''); return String(c).trim().length > 0; }
-      return true;
-    });
+    S.messages = data.session.messages || [];
+    const pendingMsg=getPendingSessionMessage(data.session);
+    if(pendingMsg) S.messages.push(pendingMsg);
+    S.activeStreamId=data.session.active_stream_id||null;
+
     syncTopbar(); renderMessages();
     showToast('Conversation refreshed');
   } catch(e) { setStatus('Refresh failed: ' + e.message); }
@@ -677,12 +965,34 @@ async function applyUpdates(){
   }
 }
 
+function getPendingSessionMessage(session){
+  const text=String(session?.pending_user_message||'').trim();
+  if(!text) return null;
+  const attachments=Array.isArray(session?.pending_attachments)?session.pending_attachments.filter(Boolean):[];
+  const messages=Array.isArray(session?.messages)?session.messages:[];
+  const lastUser=[...messages].reverse().find(m=>m&&m.role==='user');
+  if(lastUser){
+    const lastText=String(msgContent(lastUser)||'').trim();
+    if(lastText===text){
+      if(attachments.length&&!lastUser.attachments?.length) lastUser.attachments=attachments;
+      return null;
+    }
+  }
+  return {
+    role:'user',
+    content:text,
+    attachments:attachments.length?attachments:undefined,
+    _ts:session?.pending_started_at||Date.now()/1000,
+    _pending:true,
+  };
+}
 async function checkInflightOnBoot(sid) {
   const raw = localStorage.getItem(INFLIGHT_KEY);
   if (!raw) return;
   try {
     const {sid: inflightSid, streamId, ts} = JSON.parse(raw);
     if (inflightSid !== sid) { clearInflight(); return; }
+    if (S.activeStreamId && S.activeStreamId === streamId) return;
     // Only show banner if the in-flight entry is less than 10 minutes old
     if (Date.now() - ts > 10 * 60 * 1000) { clearInflight(); return; }
     // Check if stream is still active
@@ -828,6 +1138,7 @@ function renderMessages(){
     }
     const row=document.createElement('div');row.className='msg-row';
     row.dataset.msgIdx=rawIdx;row.dataset.role=m.role||'assistant';
+    if(m._live) row.setAttribute('data-live-assistant','1');
     let filesHtml='';
     if(m.attachments&&m.attachments.length)
       filesHtml=`<div class="msg-files">${m.attachments.map(f=>`<div class="msg-file-badge">${li('paperclip',12)} ${esc(f)}</div>`).join('')}</div>`;
@@ -955,7 +1266,7 @@ function renderMessages(){
   }
   scrollToBottom();
   // Apply syntax highlighting after DOM is built
-  requestAnimationFrame(()=>{highlightCode();addCopyButtons();renderMermaidBlocks();});
+  requestAnimationFrame(()=>{highlightCode();addCopyButtons();renderMermaidBlocks();renderKatexBlocks();});
   // Refresh todo panel if it's currently open
   if(typeof loadTodos==='function' && document.getElementById('panelTodos') && document.getElementById('panelTodos').classList.contains('active')){
     loadTodos();
@@ -1229,12 +1540,70 @@ function renderMermaidBlocks(){
   });
 }
 
-function appendThinking(){
-  $('emptyState').style.display='none';
-  const row=document.createElement('div');row.className='msg-row';row.id='thinkingRow';
-  row.innerHTML=`<div class="msg-role assistant"><div class="role-icon assistant">H</div>Hermes</div><div class="thinking"><div class="dot"></div><div class="dot"></div><div class="dot"></div></div>`;
-  $('msgInner').appendChild(row);scrollToBottom();
+let _katexLoading=false;
+let _katexReady=false;
+
+function renderKatexBlocks(){
+  const blocks=document.querySelectorAll('.katex-block:not([data-rendered]),.katex-inline:not([data-rendered])');
+  if(!blocks.length) return;
+  if(!_katexReady){
+    if(!_katexLoading){
+      _katexLoading=true;
+      const script=document.createElement('script');
+      script.src='https://cdn.jsdelivr.net/npm/katex@0.16.22/dist/katex.min.js';
+      script.integrity='sha384-cMkvdD8LoxVzGF/RPUKAcvmm49FQ0oxwDF3BGKtDXcEc+T1b2N+teh/OJfpU0jr6';
+      script.crossOrigin='anonymous';
+      script.onload=()=>{
+        if(typeof katex!=='undefined'){
+          _katexReady=true;
+          renderKatexBlocks();
+        }
+      };
+      document.head.appendChild(script);
+    }
+    return;
+  }
+  blocks.forEach(el=>{
+    el.dataset.rendered='true';
+    const src=el.textContent||'';
+    const displayMode=el.dataset.katex==='display';
+    try{
+      katex.render(src,el,{
+        displayMode,
+        throwOnError:false,
+        trust:false,
+        strict:'ignore',
+      });
+    }catch(e){
+      // Leave as raw text in a code span on failure
+      el.outerHTML=`<code>${esc(src)}</code>`;
+    }
+  });
 }
+
+function _thinkingMarkup(text=''){
+  const _bn=window._botName||'Hermes';
+  const icon=esc(_bn.charAt(0).toUpperCase());
+  const label=esc(_bn);
+  const body=(text&&String(text).trim())
+    ? `<div class="thinking-card open"><div class="thinking-card-header"><span class="thinking-card-icon">${li('lightbulb',14)}</span><span class="thinking-card-label">${t('thinking')}</span></div><div class="thinking-card-body"><pre>${esc(String(text).trim())}</pre></div></div>`
+    : `<div class="thinking"><div class="dot"></div><div class="dot"></div><div class="dot"></div></div>`;
+  return `<div class="msg-role assistant"><div class="role-icon assistant">${icon}</div>${label}</div>${body}`;
+}
+function appendThinking(text=''){
+  $('emptyState').style.display='none';
+  let row=$('thinkingRow');
+  if(!row){
+    row=document.createElement('div');
+    row.className='msg-row';
+    row.id='thinkingRow';
+    $('msgInner').appendChild(row);
+  }
+  row.className=(text&&String(text).trim())?'msg-row thinking-card-row':'msg-row';
+  row.innerHTML=_thinkingMarkup(text);
+  scrollToBottom();
+}
+function updateThinking(text=''){appendThinking(text);}
 function removeThinking(){const el=$('thinkingRow');if(el)el.remove();}
 
 function fileIcon(name, type){
@@ -1493,4 +1862,3 @@ async function uploadPendingFiles(){
   if(failures===total&&total>0)throw new Error(t('all_uploads_failed',total));
   return names;
 }
-

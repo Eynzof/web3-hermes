@@ -11,7 +11,7 @@ const ICONS={
 };
 
 async function newSession(flash){
-  MSG_QUEUE.length=0;updateQueueBadge();
+  updateQueueBadge();
   S.toolCalls=[];
   clearLiveToolCards();
   // Use profile default workspace for new sessions after a profile switch (one-shot),
@@ -20,56 +20,142 @@ async function newSession(flash){
   S._profileDefaultWorkspace=null; // consume — only applies to the first new session after switch
   const data=await api('/api/session/new',{method:'POST',body:JSON.stringify({model:$('modelSelect').value,workspace:inheritWs})});
   S.session=data.session;S.messages=data.session.messages||[];
+  S.lastUsage={...(data.session.last_usage||{})};
   if(flash)S.session._flash=true;
   localStorage.setItem('hermes-webui-session',S.session.session_id);
-  syncTopbar();await loadDir('.');renderMessages();
+  // Reset per-session visual state: a fresh chat is idle even if another
+  // conversation is still streaming in the background.
+  S.busy=false;
+  S.activeStreamId=null;
+  updateSendBtn();
+  const _cb=$('btnCancel');if(_cb)_cb.style.display='none';
+  setStatus('');
+  setComposerStatus('');
+  updateQueueBadge(S.session.session_id);
+  syncTopbar();renderMessages();loadDir('.');
   // don't call renderSessionList here - callers do it when needed
 }
 
 async function loadSession(sid){
   stopApprovalPolling();hideApprovalCard();
+  if(typeof stopClarifyPolling==='function') stopClarifyPolling();
+  if(typeof hideClarifyCard==='function') hideClarifyCard();
   const data=await api(`/api/session?session_id=${encodeURIComponent(sid)}`);
   S.session=data.session;
+  S.lastUsage={...(data.session.last_usage||{})};
   localStorage.setItem('hermes-webui-session',S.session.session_id);
-  // B9: sanitize empty assistant messages that can appear when agent only ran tool calls
-  data.session.messages=(data.session.messages||[]).filter(m=>{
-    if(!m||!m.role)return false;
-    if(m.role==='tool')return false;
-    if(m.role==='assistant'){let c=m.content||'';if(Array.isArray(c))c=c.filter(p=>p&&p.type==='text').map(p=>p.text||'').join('');return String(c).trim().length>0;}
-    return true;
-  });
+  // B9: sanitize empty assistant messages (PR #402) — build index map to remap
+  // session-level tool_calls.assistant_msg_idx to the new sanitized positions.
+  const allMsgs = data.session.messages || [];
+  const sanitized = [];
+  const origIdxToSanitizedIdx = {};
+  let lastKeptAsstIdx = -1;
+  for (let i = 0; i < allMsgs.length; i++) {
+    const m = allMsgs[i];
+    if (!m || !m.role) continue;
+    if (m.role === 'tool') continue;
+    if (m.role === 'assistant') {
+      let c = m.content || '';
+      if (Array.isArray(c)) c = c.filter(p => p && p.type === 'text').map(p => p.text || '').join('');
+      if (!String(c).trim().length) { continue; }  // empty assistant — skip
+      lastKeptAsstIdx = sanitized.length;
+    }
+    origIdxToSanitizedIdx[i] = sanitized.length;
+    sanitized.push(m);
+  }
+  if (data.session.tool_calls && data.session.tool_calls.length) {
+    for (const tc of data.session.tool_calls) {
+      if (!tc || tc.assistant_msg_idx === undefined) continue;
+      const origIdx = tc.assistant_msg_idx;
+      tc.assistant_msg_idx = (origIdx in origIdxToSanitizedIdx)
+        ? origIdxToSanitizedIdx[origIdx]
+        : (lastKeptAsstIdx >= 0 ? lastKeptAsstIdx : -1);
+    }
+  }
+  data.session.messages = sanitized;
+  const activeStreamId=data.session.active_stream_id||null;
+  if(!INFLIGHT[sid]&&activeStreamId&&typeof loadInflightState==='function'){
+    const stored=loadInflightState(sid, activeStreamId);
+    if(stored){
+      INFLIGHT[sid]={
+        messages:Array.isArray(stored.messages)&&stored.messages.length?stored.messages:[...(data.session.messages||[])],
+        uploaded:Array.isArray(stored.uploaded)?stored.uploaded:[...(data.session.pending_attachments||[])],
+        toolCalls:Array.isArray(stored.toolCalls)?stored.toolCalls:[],
+        reattach:true,
+      };
+    }
+  }
   if(INFLIGHT[sid]){
     S.messages=INFLIGHT[sid].messages;
-    // Restore live tool cards for this in-flight session
+    S.toolCalls=(INFLIGHT[sid].toolCalls||[]);
+    S.busy=true;
+    syncTopbar();renderMessages();appendThinking();loadDir('.');
     clearLiveToolCards();
+    if(typeof placeLiveToolCardsHost==='function') placeLiveToolCardsHost();
     for(const tc of (S.toolCalls||[])){
       if(tc&&tc.name) appendLiveToolCard(tc);
     }
-    syncTopbar();await loadDir('.');renderMessages();appendThinking();
     setBusy(true);setComposerStatus('');
     startApprovalPolling(sid);
+    if(typeof startClarifyPolling==='function') startClarifyPolling(sid);
+    S.activeStreamId=activeStreamId;
+    const _cb=$('btnCancel');if(_cb&&activeStreamId)_cb.style.display='inline-flex';
+    if(INFLIGHT[sid].reattach&&activeStreamId&&typeof attachLiveStream==='function'){
+      INFLIGHT[sid].reattach=false;
+      attachLiveStream(sid, activeStreamId, data.session.pending_attachments||[], {reconnecting:true});
+    }
   }else{
-    MSG_QUEUE.length=0;updateQueueBadge();  // clear queue for the viewed session
+    updateQueueBadge(sid);
     S.messages=data.session.messages||[];
-    S.toolCalls=(data.session.tool_calls||[]).map(tc=>({...tc,done:true}));
-    // Reset per-session visual state: the viewed session is idle even if another
-    // session's stream is still running in the background.
-    // We directly update the DOM instead of calling setBusy(false), because
-    // setBusy(false) drains MSG_QUEUE which we don't want here.
-    S.busy=false;
-    S.activeStreamId=null;
-    updateSendBtn();
-    const _cb=$('btnCancel');if(_cb)_cb.style.display='none';
-    setStatus('');
-    setComposerStatus('');
+    const pendingMsg=typeof getPendingSessionMessage==='function'?getPendingSessionMessage(data.session):null;
+    if(pendingMsg) S.messages.push(pendingMsg);
+    // Fix (PR #402): do NOT pre-fill S.toolCalls from session-level tool_calls —
+    // those have stale assistant_msg_idx values after B9 sanitization. Instead,
+    // set S.toolCalls=[] and let renderMessages() derive them from per-message
+    // tool_calls (which already have correct sanitized-array indices).
+    S.toolCalls=[];
     clearLiveToolCards();
-    syncTopbar();await loadDir('.');renderMessages();highlightCode();
+    if(activeStreamId){
+      S.busy=true;
+      S.activeStreamId=activeStreamId;
+      updateSendBtn();
+      const _cb=$('btnCancel');if(_cb)_cb.style.display='inline-flex';
+      setStatus('');
+      setComposerStatus('');
+      syncTopbar();renderMessages();appendThinking();loadDir('.');
+      updateQueueBadge(sid);
+      startApprovalPolling(sid);
+      if(typeof startClarifyPolling==='function') startClarifyPolling(sid);
+      if(typeof attachLiveStream==='function') attachLiveStream(sid, activeStreamId, data.session.pending_attachments||[], {reconnecting:true});
+      else if(typeof watchInflightSession==='function') watchInflightSession(sid, activeStreamId);
+    }else{
+      // Reset per-session visual state: the viewed session is idle even if another
+      // session's stream is still running in the background.
+      // We directly update the DOM instead of calling setBusy(false), because
+      // setBusy(false) drains the viewed session's queued follow-up turns.
+      S.busy=false;
+      S.activeStreamId=null;
+      updateSendBtn();
+      const _cb=$('btnCancel');if(_cb)_cb.style.display='none';
+      setStatus('');
+      setComposerStatus('');
+      updateQueueBadge(sid);
+      syncTopbar();renderMessages();highlightCode();loadDir('.');
+    }
   }
   // Sync context usage indicator from session data
   const _s=S.session;
   if(_s&&typeof _syncCtxIndicator==='function'){
     const u=S.lastUsage||{};
-    _syncCtxIndicator({input_tokens:_s.input_tokens||u.input_tokens||0,output_tokens:_s.output_tokens||u.output_tokens||0,estimated_cost:_s.estimated_cost||u.estimated_cost,context_length:u.context_length||0,last_prompt_tokens:u.last_prompt_tokens||0,threshold_tokens:u.threshold_tokens||0});
+    const _pick=(latest,stored,dflt=0)=>latest!=null?latest:(stored!=null?stored:dflt);
+    _syncCtxIndicator({
+      input_tokens:      _pick(u.input_tokens,      _s.input_tokens),
+      output_tokens:     _pick(u.output_tokens,     _s.output_tokens),
+      estimated_cost:    _pick(u.estimated_cost,    _s.estimated_cost),
+      context_length:    _pick(u.context_length,    _s.context_length),
+      last_prompt_tokens:_pick(u.last_prompt_tokens,_s.last_prompt_tokens),
+      threshold_tokens:  _pick(u.threshold_tokens,  _s.threshold_tokens),
+    });
   }
 }
 
@@ -144,8 +230,8 @@ function _openSessionActionMenu(session, anchorEl){
   const menu=document.createElement('div');
   menu.className='session-action-menu open';
   menu.appendChild(_buildSessionAction(
-    session.pinned?'Unpin conversation':'Pin conversation',
-    session.pinned?'Remove from the pinned section':'Keep this conversation at the top',
+    session.pinned?t('unpin_conversation'):t('pin_conversation'),
+    session.pinned?t('unpin_conversation_desc'):t('pin_conversation_desc'),
     session.pinned?ICONS.pin:ICONS.unpin,
     async()=>{
       closeSessionActionMenu();
@@ -155,13 +241,13 @@ function _openSessionActionMenu(session, anchorEl){
         session.pinned=newPinned;
         if(S.session&&S.session.session_id===session.session_id) S.session.pinned=newPinned;
         renderSessionList();
-      }catch(err){showToast('Pin failed: '+err.message);}
+      }catch(err){showToast(t('pin_failed')+err.message);}
     },
     session.pinned?'is-active':''
   ));
   menu.appendChild(_buildSessionAction(
-    'Move to project',
-    session.project_id?'Change which project this conversation belongs to':'Assign this conversation to a project',
+    t('move_to_project'),
+    session.project_id?t('move_to_project_desc_assigned'):t('move_to_project_desc_unassigned'),
     ICONS.folder,
     async()=>{
       closeSessionActionMenu();
@@ -169,8 +255,8 @@ function _openSessionActionMenu(session, anchorEl){
     }
   ));
   menu.appendChild(_buildSessionAction(
-    session.archived?'Restore conversation':'Archive conversation',
-    session.archived?'Bring this conversation back into the main list':'Hide this conversation until archived is shown',
+    session.archived?t('restore_conversation'):t('archive_conversation'),
+    session.archived?t('restore_conversation_desc'):t('archive_conversation_desc'),
     session.archived?ICONS.unarchive:ICONS.archive,
     async()=>{
       closeSessionActionMenu();
@@ -179,30 +265,30 @@ function _openSessionActionMenu(session, anchorEl){
         session.archived=!session.archived;
         if(S.session&&S.session.session_id===session.session_id) S.session.archived=session.archived;
         await renderSessionList();
-        showToast(session.archived?'Session archived':'Session restored');
-      }catch(err){showToast('Archive failed: '+err.message);}
+        showToast(session.archived?t('session_archived'):t('session_restored'));
+      }catch(err){showToast(t('archive_failed')+err.message);}
     }
   ));
   menu.appendChild(_buildSessionAction(
-    'Duplicate conversation',
-    'Create a copy with the same workspace and model',
+    t('duplicate_conversation'),
+    t('duplicate_conversation_desc'),
     ICONS.dup,
     async()=>{
       closeSessionActionMenu();
       try{
         const res=await api('/api/session/new',{method:'POST',body:JSON.stringify({workspace:session.workspace,model:session.model})});
         if(res.session){
-          await api('/api/session/rename',{method:'POST',body:JSON.stringify({session_id:res.session.session_id,title:(session.title||'Untitled')+' (copy)'})});
+          await api('/api/session/rename',{method:'POST',body:JSON.stringify({session_id:res.session.session_id,title:(session.title||t('untitled'))+' (copy)'})});
           await loadSession(res.session.session_id);
           await renderSessionList();
-          showToast('Session duplicated');
+          showToast(t('session_duplicated'));
         }
-      }catch(err){showToast('Duplicate failed: '+err.message);}
+      }catch(err){showToast(t('duplicate_failed')+err.message);}
     }
   ));
   menu.appendChild(_buildSessionAction(
-    'Delete conversation',
-    'Permanently remove this conversation',
+    t('delete_conversation'),
+    t('delete_conversation_desc'),
     ICONS.trash,
     async()=>{
       closeSessionActionMenu();
@@ -300,6 +386,72 @@ function filterSessions(){
   }, 350);
 }
 
+function _sessionTimestampMs(session) {
+  const raw = Number(session && (session.updated_at || session.created_at || 0));
+  return Number.isFinite(raw) ? raw * 1000 : 0;
+}
+
+function _localDayOrdinal(timestampMs) {
+  const date = new Date(timestampMs);
+  return Math.floor(Date.UTC(date.getFullYear(), date.getMonth(), date.getDate()) / 86400000);
+}
+
+function _sessionCalendarBoundaries(nowMs = Date.now()) {
+  const now = new Date(nowMs);
+  const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const startOfYesterday = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 1);
+  const startOfWeek = new Date(startOfToday);
+  startOfWeek.setDate(startOfWeek.getDate() - ((startOfWeek.getDay() + 6) % 7));
+  const startOfLastWeek = new Date(startOfWeek);
+  startOfLastWeek.setDate(startOfLastWeek.getDate() - 7);
+  return {
+    startOfToday: startOfToday.getTime(),
+    startOfYesterday: startOfYesterday.getTime(),
+    startOfWeek: startOfWeek.getTime(),
+    startOfLastWeek: startOfLastWeek.getTime(),
+  };
+}
+
+function _formatSessionDate(timestampMs, nowMs = Date.now()) {
+  const date = new Date(timestampMs);
+  const now = new Date(nowMs);
+  const options = {month:'short', day:'numeric'};
+  if (date.getFullYear() !== now.getFullYear()) options.year = 'numeric';
+  return date.toLocaleDateString(undefined, options);
+}
+
+function _formatRelativeSessionTime(timestampMs, nowMs = Date.now()) {
+  if (!timestampMs) return t('session_time_unknown');
+  const diffMs = Math.max(0, nowMs - timestampMs);
+  const minute = 60 * 1000;
+  const hour = 60 * minute;
+  const {startOfToday, startOfYesterday, startOfWeek, startOfLastWeek} = _sessionCalendarBoundaries(nowMs);
+  const dayDiff = Math.max(0, _localDayOrdinal(nowMs) - _localDayOrdinal(timestampMs));
+  if (timestampMs >= startOfToday) {
+    if (diffMs < minute) return t('session_time_just_now');
+    if (diffMs < hour) {
+      const minutes = Math.floor(diffMs / minute);
+      return t('session_time_minutes_ago', minutes);
+    }
+    const hours = Math.floor(diffMs / hour);
+    return t('session_time_hours_ago', hours);
+  }
+  if (timestampMs >= startOfYesterday) return t('session_time_bucket_yesterday');
+  if (timestampMs >= startOfWeek) return t('session_time_days_ago', dayDiff);
+  if (timestampMs >= startOfLastWeek) return t('session_time_last_week');
+  return _formatSessionDate(timestampMs, nowMs);
+}
+
+function _sessionTimeBucketLabel(timestampMs, nowMs = Date.now()) {
+  if (!timestampMs) return t('session_time_bucket_older');
+  const {startOfToday, startOfYesterday, startOfWeek, startOfLastWeek} = _sessionCalendarBoundaries(nowMs);
+  if (timestampMs >= startOfToday) return t('session_time_bucket_today');
+  if (timestampMs >= startOfYesterday) return t('session_time_bucket_yesterday');
+  if (timestampMs >= startOfWeek) return t('session_time_bucket_this_week');
+  if (timestampMs >= startOfLastWeek) return t('session_time_bucket_last_week');
+  return t('session_time_bucket_older');
+}
+
 function renderSessionListFromCache(){
   // Don't re-render while user is actively renaming a session (would destroy the input)
   if(_renamingSid) return;
@@ -361,8 +513,15 @@ function renderSessionListFromCache(){
   if(otherProfileCount>0&&!_showAllProfiles){
     const pfToggle=document.createElement('div');
     pfToggle.style.cssText='font-size:10px;padding:4px 10px;color:var(--muted);cursor:pointer;text-align:center;opacity:.7;';
-    pfToggle.textContent='Show '+otherProfileCount+' from other profiles';
+    pfToggle.textContent=t('show_other_profiles')(otherProfileCount);
     pfToggle.onclick=()=>{_showAllProfiles=true;renderSessionListFromCache();};
+    list.appendChild(pfToggle);
+  }
+  else if(_showAllProfiles&&otherProfileCount>0){
+    const pfToggle=document.createElement('div');
+    pfToggle.style.cssText='font-size:10px;padding:4px 10px;color:var(--muted);cursor:pointer;text-align:center;opacity:.7;';
+    pfToggle.textContent=t('hide_other_profiles');
+    pfToggle.onclick=()=>{_showAllProfiles=false;renderSessionListFromCache();};
     list.appendChild(pfToggle);
   } else if(_showAllProfiles&&otherProfileCount>0){
     const pfToggle=document.createElement('div');
@@ -375,7 +534,7 @@ function renderSessionListFromCache(){
   if(archivedCount>0){
     const toggle=document.createElement('div');
     toggle.style.cssText='font-size:10px;padding:4px 10px;color:var(--muted);cursor:pointer;text-align:center;opacity:.7;';
-    toggle.textContent=_showArchived?'Hide archived':'Show '+archivedCount+' archived';
+    toggle.textContent=_showArchived?t('hide_archived'):t('show_archived')(archivedCount);
     toggle.onclick=()=>{_showArchived=!_showArchived;renderSessionListFromCache();};
     list.appendChild(toggle);
   }
@@ -386,12 +545,12 @@ function renderSessionListFromCache(){
     empty.textContent='No sessions in this project yet.';
     list.appendChild(empty);
   }
+  const orderedSessions=[...sessions].sort((a,b)=>_sessionTimestampMs(b)-_sessionTimestampMs(a));
   // Separate pinned from unpinned
-  const pinned=sessions.filter(s=>s.pinned);
-  const unpinned=sessions.filter(s=>!s.pinned);
-  // Date grouping: Pinned / Today / Yesterday / Earlier
+  const pinned=orderedSessions.filter(s=>s.pinned);
+  const unpinned=orderedSessions.filter(s=>!s.pinned);
+  // Date grouping: Pinned / Today / Yesterday / This week / Last week / Older
   const now=Date.now();
-  const ONE_DAY=86400000;
   // Collapse state persisted in localStorage
   let _groupCollapsed={};
   try{_groupCollapsed=JSON.parse(localStorage.getItem('hermes-date-groups-collapsed')||'{}');}catch(e){}
@@ -401,8 +560,8 @@ function renderSessionListFromCache(){
   let curLabel=null,curItems=[];
   if(pinned.length) groups.push({label:'\u2605 Pinned',items:pinned,isPinned:true});
   for(const s of unpinned){
-    const ts=(s.updated_at||s.created_at||0)*1000;
-    const label=ts>now-ONE_DAY?'Today':ts>now-2*ONE_DAY?'Yesterday':'Earlier';
+    const ts=_sessionTimestampMs(s);
+    const label=_sessionTimeBucketLabel(ts, now);
     if(label!==curLabel){
       if(curItems.length) groups.push({label:curLabel,items:curItems});
       curLabel=label;curItems=[s];
@@ -438,6 +597,13 @@ function renderSessionListFromCache(){
   }
   // ── Render session items (extracted for group body use) ──
   // Note: declared after the groups loop but available via function hoisting.
+  function _formatSourceTag(tag){
+    // #429: return null for unknown/unrecognised tags so callers can suppress display.
+    // Previously returned the raw tag string, causing 'N/A' or other junk values
+    // from older hermes-agent state.db records to surface in the session list.
+    const names={telegram:'via Telegram',discord:'via Discord',slack:'via Slack',cli:'CLI',feishu:'via Feishu',weixin:'via WeChat'};
+    return names[tag]||null;
+  }
   function _renderOneSession(s){
     const el=document.createElement('div');
     const isActive=S.session&&s.session_id===S.session.session_id;
@@ -446,11 +612,33 @@ function renderSessionListFromCache(){
     if(isActive&&S.session&&S.session._flash)delete S.session._flash;
     const rawTitle=s.title||'Untitled';
     const tags=(rawTitle.match(/#[\w-]+/g)||[]);
-    const cleanTitle=tags.length?rawTitle.replace(/#[\w-]+/g,'').trim():rawTitle;
+    let cleanTitle=tags.length?rawTitle.replace(/#[\w-]+/g,'').trim():rawTitle;
+    // Guard: system prompt content must never surface as a visible session title
+    const _SOURCE_DISPLAY={telegram:'Telegram',discord:'Discord',slack:'Slack',cli:'CLI',feishu:'Feishu',weixin:'WeChat'};
+    if(cleanTitle.startsWith('[SYSTEM:')){
+      cleanTitle=(_SOURCE_DISPLAY[s.source_tag]||'Gateway')+' session';
+    }
+    const sessionText=document.createElement('div');
+    sessionText.className='session-text';
+    const titleRow=document.createElement('div');
+    titleRow.className='session-title-row';
     const title=document.createElement('span');
     title.className='session-title';
     title.textContent=cleanTitle||'Untitled';
     title.title='Double-click to rename';
+    const tsMs=_sessionTimestampMs(s);
+    titleRow.appendChild(title);
+    const metaBits=[];
+    if(s.is_cli_session && s.source_tag){const _stLabel=_formatSourceTag(s.source_tag);if(_stLabel)metaBits.push(_stLabel);}
+    if(s.message_count) metaBits.push(t('n_messages', s.message_count));
+    if(s.model) metaBits.push(String(s.model).split('/').pop());
+    sessionText.appendChild(titleRow);
+    if(metaBits.length){
+      const meta=document.createElement('div');
+      meta.className='session-meta';
+      meta.textContent=metaBits.join(' · ');
+      sessionText.appendChild(meta);
+    }
     // Append tag chips after the title text
     for(const tag of tags){
       const chip=document.createElement('span');
@@ -517,7 +705,7 @@ function renderSessionListFromCache(){
         title.appendChild(dot);
       }
     }
-    el.appendChild(title);
+    el.appendChild(sessionText);
     // Single trigger button that opens a shared dropdown menu
     const actions=document.createElement('div');
     actions.className='session-actions';
@@ -554,7 +742,6 @@ function renderSessionListFromCache(){
           }catch(e){ /* import failed -- fall through to read-only view */ }
         }
         await loadSession(s.session_id);renderSessionListFromCache();
-        if(typeof closeMobileSidebar==='function')closeMobileSidebar();
       }, 220);
     };
     el.ondblclick=async(e)=>{

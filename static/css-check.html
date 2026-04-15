@@ -1,0 +1,204 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>CSS检查工具</title>
+  <style>
+    body {
+      font-family: system-ui, -apple-system, sans-serif;
+      padding: 40px;
+      background: #f5f5f7;
+      color: #000;
+    }
+    .container {
+      max-width: 800px;
+      margin: 0 auto;
+      background: white;
+      padding: 30px;
+      border-radius: 12px;
+      box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+    }
+    h1 { color: #000; margin-bottom: 20px; }
+    .check-item {
+      padding: 15px;
+      margin: 10px 0;
+      border: 2px solid #ddd;
+      border-radius: 8px;
+      background: #f9f9f9;
+    }
+    .check-item.pass {
+      border-color: #4caf50;
+      background: #e8f5e9;
+    }
+    .check-item.fail {
+      border-color: #f44336;
+      background: #ffebee;
+    }
+    .status {
+      font-weight: bold;
+      font-size: 18px;
+    }
+    .pass .status { color: #4caf50; }
+    .fail .status { color: #f44336; }
+    button {
+      background: #0066cc;
+      color: white;
+      border: none;
+      padding: 12px 24px;
+      border-radius: 8px;
+      font-size: 16px;
+      cursor: pointer;
+      margin: 10px 5px;
+    }
+    button:hover {
+      background: #0052a3;
+    }
+    .code {
+      background: #f5f5f5;
+      padding: 10px;
+      border-radius: 4px;
+      font-family: monospace;
+      margin: 10px 0;
+      overflow-x: auto;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>🔍 CSS更新检查工具</h1>
+    
+    <div id="results"></div>
+    
+    <div style="margin-top: 30px;">
+      <button onclick="runChecks()">🔄 重新检查</button>
+      <button onclick="clearCache()">🗑️ 清除缓存</button>
+      <button onclick="hardRefresh()">⚡ 硬刷新</button>
+      <button onclick="window.location.href='/'">🏠 返回主页</button>
+    </div>
+    
+    <div style="margin-top: 30px; padding: 20px; background: #fff3cd; border-radius: 8px; border: 2px solid #ffc107;">
+      <h3>📋 如果检查失败，请按以下步骤操作：</h3>
+      <ol style="line-height: 2;">
+        <li><strong>清除浏览器缓存</strong>：Ctrl+Shift+Delete → 选择"缓存的图片和文件" → 清除</li>
+        <li><strong>硬刷新页面</strong>：按 Ctrl+F5 (Windows) 或 Cmd+Shift+R (Mac)</li>
+        <li><strong>重启服务器</strong>：停止Python进程，重新运行 python server.py</li>
+        <li><strong>检查文件时间戳</strong>：确认 static/style.css 文件已更新</li>
+      </ol>
+    </div>
+  </div>
+
+  <script>
+    async function runChecks() {
+      const results = document.getElementById('results');
+      results.innerHTML = '<p>检查中...</p>';
+      
+      const checks = [];
+      
+      // 检查1: style.css是否包含新的浅色主题代码
+      try {
+        const response = await fetch('/static/style.css?t=' + Date.now());
+        const css = await response.text();
+        
+        const hasLightTheme = css.includes('Light Theme Specific Overrides');
+        const hasEmptyState = css.includes(':root[data-theme="light"] .empty-state');
+        const hasCorrectBg = css.includes('--bg:#F5F5F7');
+        const hasCorrectText = css.includes('--text:#000000');
+        
+        checks.push({
+          name: 'style.css 包含浅色主题覆盖规则',
+          pass: hasLightTheme,
+          detail: hasLightTheme ? '✅ 找到 "Light Theme Specific Overrides"' : '❌ 未找到浅色主题覆盖规则'
+        });
+        
+        checks.push({
+          name: 'empty-state 浅色主题样式',
+          pass: hasEmptyState,
+          detail: hasEmptyState ? '✅ 找到 empty-state 浅色主题样式' : '❌ 未找到 empty-state 样式'
+        });
+        
+        checks.push({
+          name: '背景色设置正确',
+          pass: hasCorrectBg,
+          detail: hasCorrectBg ? '✅ 背景色为 #F5F5F7' : '❌ 背景色不正确'
+        });
+        
+        checks.push({
+          name: '文字颜色设置正确',
+          pass: hasCorrectText,
+          detail: hasCorrectText ? '✅ 文字颜色为 #000000' : '❌ 文字颜色不正确'
+        });
+        
+        // 检查文件大小（新增内容后应该更大）
+        const fileSize = css.length;
+        checks.push({
+          name: 'CSS文件大小',
+          pass: fileSize > 50000,
+          detail: `文件大小: ${fileSize} 字节 ${fileSize > 50000 ? '✅' : '❌ 文件太小，可能未更新'}`
+        });
+        
+      } catch (e) {
+        checks.push({
+          name: 'CSS文件加载',
+          pass: false,
+          detail: '❌ 无法加载CSS文件: ' + e.message
+        });
+      }
+      
+      // 检查2: 当前主题设置
+      const currentTheme = document.documentElement.dataset.theme || localStorage.getItem('hermes-theme') || 'dark';
+      checks.push({
+        name: '当前主题',
+        pass: true,
+        detail: `当前主题: ${currentTheme}`
+      });
+      
+      // 渲染结果
+      let html = '';
+      let passCount = 0;
+      
+      checks.forEach(check => {
+        if (check.pass) passCount++;
+        html += `
+          <div class="check-item ${check.pass ? 'pass' : 'fail'}">
+            <div class="status">${check.pass ? '✅ 通过' : '❌ 失败'}</div>
+            <div><strong>${check.name}</strong></div>
+            <div style="margin-top: 5px; color: #666;">${check.detail}</div>
+          </div>
+        `;
+      });
+      
+      const summary = `
+        <div style="padding: 20px; background: ${passCount === checks.length ? '#e8f5e9' : '#ffebee'}; 
+                    border-radius: 8px; margin-bottom: 20px; border: 2px solid ${passCount === checks.length ? '#4caf50' : '#f44336'};">
+          <h2 style="margin: 0 0 10px 0;">检查结果: ${passCount}/${checks.length} 通过</h2>
+          ${passCount === checks.length 
+            ? '<p style="margin: 0; font-size: 16px;">✅ 所有检查通过！CSS文件已正确更新。如果主页仍然看不清文字，请硬刷新主页（Ctrl+F5）。</p>'
+            : '<p style="margin: 0; font-size: 16px;">❌ 部分检查失败。请按照下方步骤操作。</p>'}
+        </div>
+      `;
+      
+      results.innerHTML = summary + html;
+    }
+    
+    function clearCache() {
+      if (confirm('这将清除浏览器缓存。是否继续？')) {
+        // 清除localStorage
+        localStorage.clear();
+        sessionStorage.clear();
+        
+        // 提示用户手动清除缓存
+        alert('请按 Ctrl+Shift+Delete 打开浏览器清除缓存对话框，选择"缓存的图片和文件"，然后点击"清除数据"。');
+      }
+    }
+    
+    function hardRefresh() {
+      alert('即将硬刷新页面。请确保已保存所有工作。');
+      window.location.reload(true);
+    }
+    
+    // 页面加载时自动运行检查
+    window.addEventListener('DOMContentLoaded', runChecks);
+  </script>
+</body>
+</html>

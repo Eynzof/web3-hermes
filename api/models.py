@@ -3,6 +3,7 @@ Hermes Web UI -- Session model and in-memory session store.
 """
 import collections
 import json
+import logging
 import time
 import uuid
 from pathlib import Path
@@ -14,6 +15,8 @@ from api.config import (
 )
 from api.workspace import get_last_workspace
 
+logger = logging.getLogger(__name__)
+
 
 def _write_session_index():
     """Rebuild the session index file for O(1) future reads."""
@@ -24,7 +27,7 @@ def _write_session_index():
             s = Session.load(p.stem)
             if s: entries.append(s.compact())
         except Exception:
-            pass
+            logger.debug("Failed to load session from %s", p)
     with LOCK:
         for s in SESSIONS.values():
             if not any(e['session_id'] == s.session_id for e in entries):
@@ -41,6 +44,10 @@ class Session:
                  project_id: str=None, profile=None,
                  input_tokens: int=0, output_tokens: int=0, estimated_cost=None,
                  personality=None,
+                 active_stream_id: str=None,
+                 pending_user_message: str=None,
+                 pending_attachments=None,
+                 pending_started_at=None,
                  **kwargs):
         self.session_id = session_id or uuid.uuid4().hex[:12]
         self.title = title
@@ -58,13 +65,18 @@ class Session:
         self.output_tokens = output_tokens or 0
         self.estimated_cost = estimated_cost
         self.personality = personality
+        self.active_stream_id = active_stream_id
+        self.pending_user_message = pending_user_message
+        self.pending_attachments = pending_attachments or []
+        self.pending_started_at = pending_started_at
 
     @property
     def path(self):
         return SESSION_DIR / f'{self.session_id}.json'
 
-    def save(self) -> None:
-        self.updated_at = time.time()
+    def save(self, touch_updated_at: bool = True) -> None:
+        if touch_updated_at:
+            self.updated_at = time.time()
         self.path.write_text(
             json.dumps(self.__dict__, ensure_ascii=False, indent=2),
             encoding='utf-8',
@@ -151,7 +163,7 @@ def all_sessions():
                     s['profile'] = 'default'
             return result
         except Exception:
-            pass  # fall through to full scan
+            logger.debug("Failed to load session index, falling back to full scan")
     # Full scan fallback
     out = []
     for p in SESSION_DIR.glob('*.json'):
@@ -160,7 +172,7 @@ def all_sessions():
             s = Session.load(p.stem)
             if s: out.append(s)
         except Exception:
-            pass
+            logger.debug("Failed to load session from %s", p)
     for s in SESSIONS.values():
         if all(s.session_id != x.session_id for x in out): out.append(s)
     out.sort(key=lambda s: (getattr(s, 'pinned', False), s.updated_at), reverse=True)
@@ -200,7 +212,15 @@ def save_projects(projects) -> None:
     PROJECTS_FILE.write_text(json.dumps(projects, ensure_ascii=False, indent=2), encoding='utf-8')
 
 
-def import_cli_session(session_id: str, title: str, messages, model: str='unknown', profile=None):
+def import_cli_session(
+    session_id: str,
+    title: str,
+    messages,
+    model: str='unknown',
+    profile=None,
+    created_at=None,
+    updated_at=None,
+):
     """Create a new WebUI session populated with CLI messages.
     Returns the Session object.
     """
@@ -211,8 +231,10 @@ def import_cli_session(session_id: str, title: str, messages, model: str='unknow
         model=model,
         messages=messages,
         profile=profile,
+        created_at=created_at,
+        updated_at=updated_at,
     )
-    s.save()
+    s.save(touch_updated_at=False)
     return s
 
 
@@ -287,7 +309,7 @@ def get_cli_sessions() -> list:
                     'session_id': sid,
                     'title': _display_title,
                     'workspace': str(get_last_workspace()),
-                    'model': row['model'] or 'unknown',
+                    'model': row['model'] or None,
                     'message_count': row['message_count'] or 0,
                     'created_at': row['started_at'],
                     'updated_at': raw_ts,

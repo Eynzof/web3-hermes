@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import os
 from pathlib import Path
 from urllib.parse import urlparse
@@ -23,6 +24,8 @@ from api.config import (
     verify_hermes_imports,
 )
 from api.workspace import get_last_workspace, load_workspaces
+
+logger = logging.getLogger(__name__)
 
 
 _SUPPORTED_PROVIDER_SETUPS = {
@@ -234,7 +237,7 @@ def _provider_oauth_authenticated(provider: str, hermes_home: "Path") -> bool:
         if isinstance(status, dict) and status.get("logged_in"):
             return True
     except Exception:
-        pass
+        logger.debug("Failed to get auth status for provider %s", provider)
 
     # Fallback: parse auth.json ourselves for known OAuth provider IDs.
     # Covers deployments where hermes_cli is installed but the import above
@@ -401,8 +404,15 @@ def get_onboarding_status() -> dict:
     skip_requested = skip_env in {"1", "true", "yes"}
     auto_completed = skip_requested and bool(runtime.get("chat_ready"))
 
+    # Auto-complete for existing Hermes users: if config.yaml already exists
+    # AND the system is chat_ready, treat onboarding as done.  These users
+    # configured Hermes via the CLI before the Web UI existed; they must never
+    # be shown the first-run wizard — it would silently overwrite their config.
+    config_exists = Path(_get_config_path()).exists()
+    config_auto_completed = config_exists and bool(runtime.get("chat_ready"))
+
     return {
-        "completed": bool(settings.get("onboarding_completed")) or auto_completed,
+        "completed": bool(settings.get("onboarding_completed")) or auto_completed or config_auto_completed,
         "settings": {
             "default_model": settings.get("default_model") or DEFAULT_MODEL,
             "default_workspace": settings.get("default_workspace")
@@ -451,7 +461,21 @@ def apply_onboarding_setup(body: dict) -> dict:
         if parsed.scheme not in {"http", "https"}:
             raise ValueError("base_url must start with http:// or https://")
 
-    cfg = _load_yaml_config(_get_config_path())
+    config_path = _get_config_path()
+    # Guard: if config.yaml already exists and the caller did not explicitly
+    # acknowledge the overwrite, refuse to proceed.  The frontend must pass
+    # confirm_overwrite=True after showing the user a confirmation step.
+    if Path(config_path).exists() and not body.get("confirm_overwrite"):
+        return {
+            "error": "config_exists",
+            "message": (
+                "Hermes is already configured (config.yaml exists). "
+                "Pass confirm_overwrite=true to overwrite it."
+            ),
+            "requires_confirm": True,
+        }
+
+    cfg = _load_yaml_config(config_path)
     env_path = _get_active_hermes_home() / ".env"
     env_values = _load_env_file(env_path)
 
@@ -475,13 +499,10 @@ def apply_onboarding_setup(body: dict) -> dict:
         model_cfg.pop("base_url", None)
 
     cfg["model"] = model_cfg
-    _save_yaml_config(_get_config_path(), cfg)
+    _save_yaml_config(config_path, cfg)
 
     if api_key:
         _write_env_file(env_path, {provider_meta["env_var"]: api_key})
-        # Belt-and-braces: set directly on os.environ so the value is visible to
-        # any code in the same process that reads it before the next request cycle.
-        os.environ[provider_meta["env_var"]] = api_key
 
     # Reload the hermes_cli provider/config cache so the next streaming call
     # picks up the new key without requiring a server restart.
@@ -489,14 +510,20 @@ def apply_onboarding_setup(body: dict) -> dict:
         from api.profiles import _reload_dotenv
         _reload_dotenv(_get_active_hermes_home())
     except Exception:
-        pass
+        logger.debug("Failed to reload dotenv")
+
+    # Belt-and-braces: set directly on os.environ AFTER _reload_dotenv so the
+    # value survives even if _reload_dotenv cleared it (e.g. when _write_env_file
+    # wrote to disk but the profile isolation tracking hasn't seen it yet).
+    if api_key:
+        os.environ[provider_meta["env_var"]] = api_key
 
     try:
         # hermes_cli may cache config at import time; ask it to reload if possible.
         from hermes_cli.config import reload as _cli_reload
         _cli_reload()
     except Exception:
-        pass
+        logger.debug("Failed to reload hermes_cli config")
 
     reload_config()
     return get_onboarding_status()
