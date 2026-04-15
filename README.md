@@ -6,17 +6,16 @@
 
 基于 [Hermes Agent](https://hermes-agent.nousresearch.com/) 的轻量级 Web 界面，专为中国大陆用户优化。
 
-
 ## 界面预览
 
 <table>
   <tr>
     <td width="50%" align="center">
-      <img alt="深色主题界面" src="docs/images/black.png" />
+      <img alt="深色主题界面" src="https://raw.githubusercontent.com/Web3CZ/Web3Hermes/refs/heads/main/docs/images/black.png" />
       <br /><sub>深色主题界面</sub>
     </td>
     <td width="50%" align="center">
-      <img alt="浅色主题界面" src="docs/images/light.png" />
+      <img alt="浅色主题界面" src="https://raw.githubusercontent.com/Web3CZ/Web3Hermes/refs/heads/main/docs/images/light.png" />
       <br /><sub>浅色主题界面</sub>
     </td>
   </tr>
