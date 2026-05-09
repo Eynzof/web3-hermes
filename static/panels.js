@@ -1194,7 +1194,7 @@ async function loadSettingsPanel(){
     const settings=await api('/api/settings');
     const resolvedLanguage=(typeof resolvePreferredLocale==='function')
       ? resolvePreferredLocale(settings.language, localStorage.getItem('hermes-lang'))
-      : (settings.language || localStorage.getItem('hermes-lang') || 'en');
+      : (settings.language || localStorage.getItem('hermes-lang') || 'zh');
     // Keep settings modal and current page strings in sync with the resolved locale.
     if(typeof setLocale==='function'){
       setLocale(resolvedLanguage);
@@ -1312,7 +1312,7 @@ async function saveSettings(andClose){
   const showCliSessions=!!($('settingsShowCliSessions')||{}).checked;
   const pw=($('settingsPassword')||{}).value;
   const theme=($('settingsTheme')||{}).value||'dark';
-  const language=($('settingsLanguage')||{}).value||'en';
+  const language=($('settingsLanguage')||{}).value||'zh';
   const body={};
   if(model) body.default_model=model;
 
