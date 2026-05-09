@@ -67,3 +67,8 @@ pnpm-debug.log*
 *.bak
 *.tmp
 .scratch/
+
+# ── Claude Code: 共享 skill 进仓库（覆盖全局 .claude/ 排除）────────────
+!.claude/
+!.claude/**
+.claude/settings.local.json
