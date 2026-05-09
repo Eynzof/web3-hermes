@@ -50,7 +50,7 @@ python3 bootstrap.py
 或使用启动脚本：
 
 ```bash
-./start.sh
+./scripts/start.sh
 ```
 
 服务将在 `http://127.0.0.1:8787` 启动。

@@ -1,0 +1,69 @@
+# ── Python ─────────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg-info/
+*.egg
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+htmlcov/
+.tox/
+
+# ── Virtual environments ───────────────────────────────────────────────
+# bootstrap.py creates .venv/ at repo root
+.venv/
+venv/
+env/
+ENV/
+
+# ── Environment & secrets ──────────────────────────────────────────────
+# start.sh sources .env if present; never commit it
+.env
+.env.local
+.env.*.local
+*.pem
+*.key
+
+# ── Bootstrap & runtime artifacts ──────────────────────────────────────
+# Log files (bootstrap normally writes to ~/.hermes/webui, but defensive)
+*.log
+logs/
+
+# Local TLS certs accidentally placed in repo
+cert.pem
+key.pem
+
+# ── IDE / editor ───────────────────────────────────────────────────────
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.project
+.pydevproject
+
+# ── OS junk ────────────────────────────────────────────────────────────
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+desktop.ini
+
+# ── Node (in case anyone adds frontend tooling later) ──────────────────
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# ── Local dev scratch ──────────────────────────────────────────────────
+*.bak
+*.tmp
+.scratch/
